@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader, random_split, TensorDataset
 import lightning as L
 from .samplers import TimeGroupedSampler, ListSampler
-
+from pathlib import Path
 
 
 class DynamicsDataModule(L.LightningDataModule):
@@ -26,106 +26,74 @@ class DynamicsDataModule(L.LightningDataModule):
         self.device     = device
 
     def setup(self, stage=None):
-        if not hasattr(self, "full_ds"):  # Ensure dataset is created only once
-            
+        cache_path = Path("assets/full_mnist_cfm_pairs/full_ds.pth")
+        if cache_path.exists():
+            self.full_ds = torch.load(cache_path)
+        else:
+            # temp move model to CPU
+            orig_dev = next(self.dynamics.parameters()).device
+            self.dynamics.to("cpu").eval()
+
             matrix_x0 = []
             matrix_system_derivative_data = []
             matrix_targets = []
             matrix_delta_t = []
 
-            for i in range(len(self.traj)):
-                t = self.t_grid[i] #take the corresponding timesteps from 0 to 1
-                t_val = self.t_grid[i]
-                
-                #Now we get the targets corresponding to the paths we're on
-                x1 = self.traj[-1].to(self.device) #the numbers it samples 
-                x = self.traj[i].to(self.device)  # Get the 1000 images corresponding to this timestep
-               
-                # Shuffle the 2000 points (rows) at this time step (for time-ordering, more efficient with Koopman operator)
-                #perm = torch.randperm(x.size(0))
-                #x = x[perm]
+            for i, t_val in enumerate(self.t_grid):
+                # images at time-step i, *CPU*
+                x = self.traj[i].cpu()
+                x1 = self.traj[-1].cpu()
+                B = x.shape[0]
 
-                t = torch.ones((x.shape[0], 1), device=x.device) * t_val #Extend the time so that we can concatenate to get (t,x) that goes in encoder
-                t = t.to(self.device)  
-                
-                #We compute the time required from where we are to get to the target, so we can compute the appropriate evolution operator
-                delta_t = 1-t #we keep track of the time to elapse, so that we can regularize sampling
-                delta_t = delta_t.to(self.device)
-                
-                
+                # build the time channel and Δt, on CPU
+                t = torch.full((B, 1), float(t_val), device="cpu")
+                delta_t = 1.0 - t
+
+                # dx on CPU
                 with torch.no_grad():
-                    #print(f"t device: {t.device}")
-                    #print(f"x device: {x.device}")
-                    #print(f"dynamics device: {next(self.dynamics.parameters()).device}")
-                    #print(self.dynamics.device)
-                    dx = self.dynamics(t[:], x)  # get the fixed v(t,x) vector field. Important for the Lg-grad_g*v loss term
+                    dx = self.dynamics(t, x)
 
+                # assembling inputs & targets
+                matrix_x0.append(torch.hstack((t, x.reshape(B, -1))))
                 matrix_system_derivative_data.append(dx)
-                
-                t_one = torch.ones((x.shape[0], 1), device=x.device)
-                x1 = x1.reshape((len(x1),-1))
-                
-                
-                targets = torch.hstack((t_one,x1))
-
-                matrix_targets.append(targets)
-                
+                matrix_targets.append(torch.hstack((torch.ones(B,1), x1.reshape(B,-1))))
                 matrix_delta_t.append(delta_t)
-                x = x.reshape((len(x), -1))
-                inputs = torch.hstack((t, x)) #Make the inputs of the encoder
-                matrix_x0.append(inputs)
 
-            print(len(matrix_targets))
+            # stack into four big CPU tensors
+            matrix_x0   = torch.vstack(matrix_x0)
+            matrix_dx   = torch.vstack(matrix_system_derivative_data)
+            matrix_y    = torch.vstack(matrix_targets)
+            matrix_dt   = torch.vstack(matrix_delta_t)
 
-            #The targets
-            matrix_targets = torch.vstack(matrix_targets)
-
-            #Time to target
-            matrix_delta_t = torch.vstack(matrix_delta_t)
-
-            matrix_x0 = torch.vstack(matrix_x0) #stack to get all (t,x) point for all 1000 trajectories
-            matrix_system_derivative_data = torch.vstack(matrix_system_derivative_data) #get all the vector field at these corresponding points
-            
-
-            # Train-test split
-            #matrix_x_data_train, matrix_x_data_test, matrix_x_next_data_train, matrix_x_next_data_test = train_test_split(
-            #    matrix_x0, matrix_system_derivative_data, test_size=0.2, random_state=42
-            #)
-
-            # Create datasets
-            print("matrix_x0:", matrix_x0.shape)
-            print("matrix_system_derivative_data:", matrix_system_derivative_data.shape)
-            print("matrix_targets:", matrix_targets.shape)
-            print("matrix_delta_t:", matrix_delta_t.shape)
-
-            #Now we feed x, f(x), x1 and time_to_target
-            self.full_ds = TensorDataset(matrix_x0.float().to("cpu"), matrix_system_derivative_data.float().to("cpu"), matrix_targets.float().to("cpu"),matrix_delta_t.float().to("cpu"))
-            #self.test_dataset = TensorDataset(matrix_x_data_test.float(), matrix_x_next_data_test.float())
-
-            # split indices into train / val
-            n = len(self.full_ds)
-            n_val = int(self.val_frac * n)
-            n_train = n - n_val
-            train_range = set(range(0, n_train))
-            val_range   = set(range(n_train, n))
-
-            # build time‑grouped ordering over full dataset
-            full_sampler = TimeGroupedSampler(
-                time_steps=len(self.t_grid),
-                group_size=self.traj.size(1),  # B for each time slice
+            # cache it
+            self.full_ds = TensorDataset(
+                matrix_x0, matrix_dx, matrix_y, matrix_dt
             )
-            full_order = full_sampler.indices
+            cache_path.parent.mkdir(exist_ok=True, parents=True)
+            torch.save(self.full_ds, cache_path)
 
-            # filter & remap into two lists of positions
-            self.train_ordered_indices = [i for i in full_order if i in train_range]
-            self.val_ordered_indices   = [i for i in full_order if i in val_range]
+            # move dynamics back to original device
+            self.dynamics.to(orig_dev)
 
-            # wrap into ListSampler instances
-            self.train_sampler = ListSampler(self.train_ordered_indices)
-            self.val_sampler   = ListSampler(self.val_ordered_indices)
+        N = len(self.full_ds)
+        n_val   = int(self.val_frac * N)
+        n_train = N - n_val
+        train_set = set(range(n_train))
+        val_set   = set(range(n_train, N))
+
+        # reverse‑time ordering over [0..N-1]
+        full_order = TimeGroupedSampler(
+            time_steps=len(self.t_grid),
+            group_size=self.traj.size(1),
+        ).indices
+
+        self.train_ordered_indices = [i for i in full_order if i in train_set]
+        self.val_ordered_indices   = [i for i in full_order if i in val_set]
+
+        self.train_sampler = ListSampler(self.train_ordered_indices)
+        self.val_sampler   = ListSampler(self.val_ordered_indices)
 
     def train_dataloader(self):
-        # sample from full_ds in time‑grouped, split‑aware order
         return DataLoader(
             self.full_ds,
             batch_size=self.batch_size,

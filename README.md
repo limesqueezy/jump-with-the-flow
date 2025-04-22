@@ -1,5 +1,6 @@
 Add Hydra asap
 
+```
 koopman/
 │   __init__.py
 │
@@ -39,3 +40,4 @@ koopman/
     ├── train_flow.py      # trains flow‑matching UNet; saves ckpt
     ├── train_koopman.py   # trains deep‑Koopman using saved flow
     └── sample.py          # rolls out & saves images/metrics
+```

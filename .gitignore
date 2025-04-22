@@ -13,3 +13,4 @@ lightning_logs/
 
 assets/
 checkpoints/
+generated_samples/*
