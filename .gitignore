@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+*.log
+*.tmp
+*.swp
+lightning_logs/
+
+*.ckpt
+*.pth
+*.pt
+*.zip
+
+assets/
+checkpoints/
