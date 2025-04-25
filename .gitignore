@@ -10,6 +10,8 @@ lightning_logs/
 *.pth
 *.pt
 *.zip
+*.png
+*.jpeg
 
 assets/
 checkpoints/
@@ -17,3 +19,4 @@ generated_samples/*
 
 runs/
 outputs/
+.qodo

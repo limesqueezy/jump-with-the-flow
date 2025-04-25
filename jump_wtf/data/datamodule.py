@@ -1,10 +1,12 @@
 from __future__ import annotations
+
+from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader, random_split, TensorDataset
 import lightning as L
 from .samplers import TimeGroupedSampler, ListSampler
 from pathlib import Path
-
+from typing import Union
 
 class DynamicsDataModule(L.LightningDataModule):
     """Builds the (t, x, v, x₁, Δt) tuples once and serves them epoch‑after‑epoch."""
@@ -12,6 +14,8 @@ class DynamicsDataModule(L.LightningDataModule):
         self,
         traj: torch.Tensor,
         dynamics,
+        dynamics_path: str = "mnist_otcfm_epoch_20",
+        cache_dir: Union[str, Path] = "assets/dynamics_datasets",
         batch_size: int = 64,
         t_grid: int = 100,
         val_frac: float = 0.2,
@@ -25,10 +29,11 @@ class DynamicsDataModule(L.LightningDataModule):
         self.val_frac   = val_frac
         self.device     = device
 
+        self.cache_path = Path(cache_dir) / f"{dynamics_path}.pth"
+
     def setup(self, stage=None):
-        cache_path = Path("assets/full_mnist_cfm_pairs/full_ds.pth")
-        if cache_path.exists():
-            self.full_ds = torch.load(cache_path)
+        if self.cache_path.exists():
+            self.full_ds = torch.load(self.cache_path)
         else:
             # temp move model to CPU
             orig_dev = next(self.dynamics.parameters()).device
@@ -39,7 +44,9 @@ class DynamicsDataModule(L.LightningDataModule):
             matrix_targets = []
             matrix_delta_t = []
 
-            for i, t_val in enumerate(self.t_grid):
+            # TODO: Would this happen faster on GPU? Could we do this on GPU?
+
+            for i, t_val in enumerate(tqdm(self.t_grid, desc="building data")):
                 # images at time-step i, *CPU*
                 x = self.traj[i].cpu()
                 x1 = self.traj[-1].cpu()
@@ -69,8 +76,8 @@ class DynamicsDataModule(L.LightningDataModule):
             self.full_ds = TensorDataset(
                 matrix_x0, matrix_dx, matrix_y, matrix_dt
             )
-            cache_path.parent.mkdir(exist_ok=True, parents=True)
-            torch.save(self.full_ds, cache_path)
+            self.cache_path.parent.mkdir(exist_ok=True, parents=True)
+            torch.save(self.full_ds, self.cache_path)
 
             # move dynamics back to original device
             self.dynamics.to(orig_dev)

@@ -39,7 +39,7 @@ def sample_efficient_plot(model_generic, t_max=1, n_iter=100, n_samples=1, devic
         axs[i].axis("off")
         axs[i].set_title(f"Sample {i+1:02d}")
         # save for FID
-        plt.imsave(save_dir / f"sample_{i+1:02d}.png", gray, cmap="gray", vmin=0, vmax=1)
+        # plt.imsave(save_dir / f"sample_{i+1:02d}.png", gray, cmap="gray", vmin=0, vmax=1)
 
     # hide any extra axes
     for ax in axs[n_samples:]:

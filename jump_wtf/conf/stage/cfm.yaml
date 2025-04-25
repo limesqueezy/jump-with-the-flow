@@ -1,7 +1,0 @@
-# only CIFAR‑10 CFM stage
-name: cfm
-sigma: 0.0
-
-# rollout params
-n_traj:     2000
-traj_steps: 100

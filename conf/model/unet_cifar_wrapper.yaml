@@ -1,0 +1,5 @@
+_target_: jump_wtf.models.unet_wrapper.UNetWrapperKoopman
+
+dim: [3, 32, 32]
+num_channels: 128
+num_res_blocks: 2

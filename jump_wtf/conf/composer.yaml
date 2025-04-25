@@ -1,8 +1,0 @@
-defaults:
-  - dataset: cifar10
-  - model: unet_cifar
-  - stage: cfm
-  - training: cfm_cifar
-
-paths:
-  data_dir: ../assets

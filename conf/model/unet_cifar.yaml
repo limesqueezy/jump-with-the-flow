@@ -1,0 +1,5 @@
+_target_: torchcfm.models.unet.unet.UNetModelWrapper
+
+dim: [3, 32, 32]
+num_channels: 128
+num_res_blocks: 2

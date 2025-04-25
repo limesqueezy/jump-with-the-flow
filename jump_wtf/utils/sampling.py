@@ -10,14 +10,18 @@ def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cu
     model_generic.to(device).eval()
     dt = t_max / n_iter
 
-    # initial noise + time channel
-    x = torch.randn((n_samples, 28, 28), device=device).reshape(n_samples, -1)
-    t0 = torch.zeros((n_samples, 1), device=device)
-    x = torch.cat((x, t0), dim=1)
+    enc = model_generic.autoencoder.encoder
+    C   = enc.in_channels
+    H   = enc.image_size
+    W   = enc.image_size
+    spatial_dim = C * H * W
+    #    noise: [n_samples, C, H, W] flattened to [n_samples, spatial_dim]
+    x_spatial = torch.randn((n_samples, C, H, W), device=device)
+    x_flat    = x_spatial.view(n_samples, spatial_dim)
+    t0        = torch.zeros((n_samples, 1), device=device)
+    x         = torch.cat((x_flat, t0), dim=1)  # shape [n_samples, spatial_dim+1]
 
     koop_op = get_koop_continuous(model_generic, model_generic.koopman.operator_dim, dt)
-    torch.cuda.empty_cache()
-
     with torch.no_grad():
         z = model_generic.autoencoder.encoder(x)
         for _ in range(n_iter):
@@ -27,8 +31,10 @@ def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cu
 
         decoded = model_generic.autoencoder.decoder(z)
 
-    # reshape and clamp to [–1,1]
-    imgs = decoded[:, :28*28] \
-            .reshape(n_samples, 1, 28, 28) \
-            .clamp(-1, 1)
+    # reshape to (n_samples, C, H, W) and clamp
+    imgs = (
+        decoded[:, :spatial_dim]
+        .view(n_samples, C, H, W)
+        .clamp(-1, 1)
+    )
     return imgs

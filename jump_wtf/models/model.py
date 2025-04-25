@@ -8,18 +8,13 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from jump_wtf.utils.fid import make_fid_metric, compute_real_stats
 import debugpy
 
-# # Start the debug server
-# debugpy.listen(("0.0.0.0", 5678))  # You can use any port here
-# print("Waiting for debugger to attach...")
-# debugpy.wait_for_client()  # This will block until the debugger attaches
-
 class Model(L.LightningModule):
     def __init__(self, dynamics, autoencoder, koopman, 
                  loss_function, autoencoder_lr, lie_lr, 
                  lr_scheduler, decode_predict_bool=True, 
                  vae_loss_bool=False, koop_reg_bool=False, energy_bool=False, 
                  potential_function=None,  
-                 gamma=None, delta_t = 0.01, multistep=False, period=10, time_bool=False, plot_every=50, num_iter=100, cfm_model=None, warmup_step=1000, fid_interval=500, fid_real_stats="assets/fid_stats_mnist.pt"):
+                 gamma=None, delta_t = 0.01, multistep=False, period=10, time_bool=False, plot_every=50, num_iter=100, cfm_model=None, warmup_step=1000, fid_interval=500, fid_real_stats_path="assets/fid_stats/mnist/fid_stats_mnist.pt"):
         super().__init__()
         self.save_hyperparameters(ignore=["autoencoder", "koopman", "loss_function", "dynamics", "potential_function", "cfm_model"])
 
@@ -53,8 +48,8 @@ class Model(L.LightningModule):
 
         self.fid_interval = fid_interval
 
-        self.fid_train = make_fid_metric(fid_real_stats)
-        self.fid_val   = make_fid_metric(fid_real_stats)
+        self.fid_train = make_fid_metric(fid_real_stats_path)
+        self.fid_val   = make_fid_metric(fid_real_stats_path)
 
     def training_step(self, batch, batch_idx):
         
@@ -62,8 +57,6 @@ class Model(L.LightningModule):
         optimiser_autoencoder, optimiser_lie = self.optimizers()
         autoencoder_scheduler, lie_scheduler = self.lr_schedulers()
         tensor2d_batch_x, tensor2d_batch_x_next, targets, delta_t = batch
-
-        breakpoint()
 
         if (self.global_step == 0) or (self.global_step%self.plot_every==0):
             
@@ -79,10 +72,9 @@ class Model(L.LightningModule):
             #else: 
             #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, time=None, time_dep=self.time_bool)
             sample = sample_efficient(self, t_max=1, n_iter=100)
-            sample = sample.reshape((1,28,28)).clip(-1, 1)
-            tensorboard.add_image("sample", sample, self.global_step)
+            sample = sample.clamp(-1, 1)
+            tensorboard.add_image("sample", sample, self.global_step, dataformats="NCHW")
         
-            
             #Log relevant info
             #self.log("total_log_error", total_log_error, prog_bar=True)
             #self.log("min_error", min_error, prog_bar=True)
@@ -127,7 +119,6 @@ class Model(L.LightningModule):
             #hist = torchvision.transforms.functional.pil_to_tensor(hist)
             #tensorboard.add_image("hist", hist, self.global_step)
             #os.remove("/home/turan/koopman/plots/hist.png")
-        
         (encoded, jvp) = \
         autograd.functional.jvp(self.autoencoder.encoder,
                                 tensor2d_batch_x,

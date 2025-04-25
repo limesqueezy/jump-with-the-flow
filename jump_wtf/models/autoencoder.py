@@ -18,17 +18,20 @@ class UNetModelWrapper_encoder(UNetModel):
         *args,
         **kwargs
     ) -> torch.Tensor:
-        # 1) Unpack timestep and flattened image
-        timesteps = inputs[:, 0]
-        flat      = inputs[:, 1:]
+        
+        timesteps = inputs[:, 0]        # [B]
+        flat      = inputs[:, 1:]       # [B, C*H*W]
         B, L      = flat.shape
-        side      = int(L ** 0.5)
-        x         = flat.view(B, 1, side, side)
 
-        # 2) Delegate to parent UNetModelWrapper.forward (which in turn calls UNetModel)
+        C = self.in_channels
+        H = self.image_size
+        W = self.image_size
+        x = flat.view(B, C, H, W)       # [B, C, H, W]
+
+        # Delegate to parent UNetModelWrapper.forward (which in turn calls UNetModel), y is not used since we dont use conditioning yet.
         out = super().forward(timesteps, x, y=y, *args, **kwargs)
 
-        # 3) Flatten output and concatenate with original inputs
+        # Flatten output and concatenate with original inputs
         out_flat = out.view(B, L)
         return torch.hstack((inputs, out_flat))
 
@@ -36,10 +39,11 @@ class UNetModelWrapper_encoder(UNetModel):
 class Decoder(nn.Module):
     def __init__(self, dim=(1, 28, 28)):
         super().__init__()
-        self.input_dimension = dim[-1]*dim[-2]+1
+        C, H, W = dim
+        self.input_dimension = C * H * W + 1
     
     def forward(self, tensor2d_x):
-        return tensor2d_x[:,:self.input_dimension]
+        return tensor2d_x[:, :self.input_dimension]
 
 class Autoencoder_unet(nn.Module):
     def __init__(self, num_channels,num_res_blocks, dim, device='cuda'):
@@ -51,15 +55,5 @@ class Autoencoder_unet(nn.Module):
             ).to(device)
         self.decoder = Decoder(dim)
 
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        return self.encoder(x)
-
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        return self.decoder(z)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.decode(self.encode(x))
-
-    # def forward(self, tensor2d_x: torch.Tensor):
-    #     tensor2d_x = self.encoder(tensor2d_x)
-    #     return self.decoder(tensor2d_x)
+        return self.decoder(self.encoder(x))

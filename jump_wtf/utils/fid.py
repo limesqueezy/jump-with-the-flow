@@ -61,23 +61,36 @@ class FIDValCallback(Callback):
 
 def to_fid(img: torch.Tensor) -> torch.Tensor:
     """
-    28×28→299×299 & gray→RGB; expects [-1,1] floats on **any** device,
-    returns uint8 on the **same** device.
+    Resize to 299×299 and ensure a 3-channel uint8 image:
+      - Grayscale (C=1)
+      - RGB (C=3)
+    Expects floats in [–1, 1], returns uint8 on the same device.
     """
-    img = torch.nn.functional.interpolate(img, size=299, mode="bilinear", antialias=True)
+    # 1) resize & scale to [0,255]
+    img = torch.nn.functional.interpolate(
+        img, size=299, mode="bilinear", antialias=True
+    )
     img = (img.clamp(-1, 1) * 127.5 + 127.5).to(torch.uint8)
-    return img.repeat(1, 3, 1, 1)
+    # ensure 3 channels
+    C = img.shape[1]
+    if C == 1:
+        img = img.repeat(1, 3, 1, 1)
+    elif C == 3:
+        pass  # already RGB
+    else:
+        raise ValueError(f"Unexpected number of channels for FID: got {C}")
+    return img
 
 @torch.no_grad()
 def compute_real_stats(
-    data,                             # Dataset or DataLoader
+    data,
     out,
     bs=256,
     device="cuda",
     num_workers=4,
 ):
     """
-    One‑shot over your real data → dump full FID.state_dict()
+    One‑shot over your real data, dump full FID.state_dict()
     Skips work if `out` already exists.
 
     Args:
