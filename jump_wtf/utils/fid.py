@@ -99,6 +99,8 @@ def compute_real_stats(
       bs:   batch-size (ignored if you passed in a DataLoader)
     """
     p = Path(out)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
     if p.exists():
         return str(p)
 

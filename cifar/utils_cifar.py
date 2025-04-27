@@ -14,14 +14,20 @@ import os
 
 import torch
 from torch import distributed as dist
+from torch.utils.tensorboard.writer import SummaryWriter
 from torchdyn.core import NeuralODE
 
 # from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid, save_image
+from tqdm import tqdm
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
+class LoggingSummaryWriter(SummaryWriter):
+    def add_text(self, tag, text, *args, **kwargs):
+        super().add_text(tag, text, *args, **kwargs)
+        print(f"[TBoard:{tag}] {text}")
 
 def setup(
     rank: int,
@@ -135,3 +141,35 @@ def log_final_trajectories(
     imgs = imgs.clamp(-1, 1)
     grid = make_grid(imgs, nrow=nrow, normalize=True, value_range=(-1, 1))
     writer.add_image(tag, grid, global_step=step)
+
+def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
+    net.eval()
+    n         = cfg.cfm.traj.n_traj
+    t_steps   = cfg.cfm.traj.traj_steps
+    chunk     = getattr(cfg.cfm.traj, "chunk_size", 500)
+    t_span    = torch.linspace(0, 1, t_steps, device=device)
+    all_chunks = []
+    start = 0
+
+    pbar = tqdm(total=n, desc="Gen trajectories", unit="traj")
+    while start < n:
+        end = min(start + chunk, n)
+        try:
+            z0 = torch.randn(end - start, *cfg.model.dim, device=device)
+            with torch.no_grad():
+                c = node.trajectory(z0, t_span).cpu()
+            all_chunks.append(c)
+            pbar.update(end - start)
+            start = end
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            # back off chunk size
+            chunk = max(1, chunk // 2)
+            pbar.write(f"OOM, reducing chunk to {chunk}")
+            # do NOT advance start; retry this slice
+        # any other exception will bubble out
+
+    pbar.close()
+    traj = torch.cat(all_chunks, dim=0)
+    torch.save(traj, out_path)
+    return out_path

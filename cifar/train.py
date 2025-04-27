@@ -8,9 +8,8 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE
 from tqdm import trange
-from torch.utils.tensorboard.writer import SummaryWriter
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
-from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories
+from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter
 from tqdm.auto import trange
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import Trainer
@@ -23,10 +22,14 @@ from jump_wtf.models.autoencoder import Autoencoder_unet
 from jump_wtf.operators.generic import GenericOperator_state
 import torch.nn as nn
 
+# force only GPU 0 to be visible to CUDA
+os.environ["CUDA_DEVICE_ORDER"]    = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 @hydra.main(version_base=None, config_path="../conf", config_name="defaults")
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
-    writer = SummaryWriter()
+    writer = LoggingSummaryWriter()
 
     run_koop(cfg, writer)
 
@@ -81,6 +84,7 @@ def run_cfm(cfg, writer):
             batch_size=cfg.cfm.train.batch_size,
             t_grid=cfg.cfm.traj.traj_steps,
             val_frac=cfg.cfm.train.val_frac,
+            chunk_steps=cfg.cfm.traj.chunk_size,
             device=cfg.cfm.train.device,
         )
         dm.setup()
@@ -116,7 +120,7 @@ def run_cfm(cfg, writer):
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), cfg.cfm.train.grad_clip)
             opt.step(); sched.step()
-            ema(net, ema_net, cfg.stage.ema_decay)
+            ema(net, ema_net, cfg.cfm.train.ema_decay)
 
             if step % cfg.cfm.train.log_every_n_steps == 0:
                 writer.add_scalar("cfm/loss", loss.item(), step)
@@ -154,6 +158,7 @@ def run_cfm(cfg, writer):
         cache_dir=str(dyn_dataset_dir),
         batch_size=cfg.cfm.train.batch_size,
         t_grid=cfg.cfm.traj.traj_steps,
+        chunk_steps=cfg.cfm.traj.chunk_size,
         val_frac=cfg.cfm.train.val_frac,
     )
     dm.setup()
@@ -168,7 +173,7 @@ def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
     torch.save(traj.cpu(), out_path)
     return out_path
 
-def run_koop(cfg: DictConfig, writer: SummaryWriter):
+def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
     """
     Train (or resume) the Koopman-encoder stage *on top of* the frozen
     dynamics learned by run_cfm.  We simply reuse run_cfm() to get the
@@ -180,7 +185,6 @@ def run_koop(cfg: DictConfig, writer: SummaryWriter):
     dm = run_cfm(cfg, writer)
     dm.dynamics.requires_grad_(False)
     dm.dynamics.eval()
-
     # Precompute FID stats for chosen dataset
     stats_path = Path("assets/fid_stats") / cfg.dataset_name
     stats_path.mkdir(parents=True, exist_ok=True)
@@ -238,12 +242,12 @@ def run_koop(cfg: DictConfig, writer: SummaryWriter):
     ckpt_cb        = ModelCheckpoint(
         dirpath=ckpt_root, filename="best-step{step:06d}-{train_loss_step:.4f}",
         monitor="total_loss", mode="min", save_top_k=1,
-        every_n_train_steps=10, save_on_train_epoch_end=False, save_last=True)
+        every_n_train_steps=100, save_on_train_epoch_end=False, save_last=True)
 
     ckpt_fid_train = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_train", mode="min",
         filename="best-fid-train-{step:.0f}-{fid_train:.3f}",
-        save_top_k=1, every_n_train_steps=20, save_on_train_epoch_end=False)
+        save_top_k=1, every_n_train_steps=50, save_on_train_epoch_end=False)
 
     ckpt_fid_val   = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_val", mode="min",
@@ -253,7 +257,7 @@ def run_koop(cfg: DictConfig, writer: SummaryWriter):
         callbacks=[
             checkpoint_cb,
             ckpt_cb,
-            FIDTrainCallback(every_n_steps=20),
+            FIDTrainCallback(every_n_steps=50),
             ckpt_fid_train,
             FIDValCallback(),
             ckpt_fid_val,

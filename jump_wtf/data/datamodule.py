@@ -19,6 +19,7 @@ class DynamicsDataModule(L.LightningDataModule):
         batch_size: int = 64,
         t_grid: int = 100,
         val_frac: float = 0.2,
+        chunk_steps: int = 2000,
         device = "cuda"
     ):
         super().__init__()
@@ -27,6 +28,7 @@ class DynamicsDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.t_grid     = torch.linspace(0, 1, t_grid)
         self.val_frac   = val_frac
+        self.chunk_steps= chunk_steps
         self.device     = device
 
         self.cache_path = Path(cache_dir) / f"{dynamics_path}.pth"
@@ -81,6 +83,69 @@ class DynamicsDataModule(L.LightningDataModule):
 
             # move dynamics back to original device
             self.dynamics.to(orig_dev)
+            
+            # ###────────────────── fast + streaming build ──────────────────
+            # dev = torch.device(self.device)     # usually "cuda"
+            # self.dynamics.to(dev).eval()
+
+            # T, B, C, H, W = self.traj.shape
+            # row_feats     = C * H * W
+            # cols_x0y      = 1 + row_feats      # (t, x)   and   (1, x₁)
+
+            # dtype      = torch.float32                         # keep legacy precision
+            # chunk_T    = getattr(self, "chunk_steps", T)       # optional arg
+            # tmp_path   = self.cache_path.with_suffix(".tmp")   # streamed file
+            # if tmp_path.exists(): tmp_path.unlink()            # fresh run
+
+            # torch.manual_seed(0)                               # reproducible tmp names
+
+            # offset = 0
+            # for t0 in range(0, T, chunk_T):
+            #     t_slice = self.t_grid[t0:t0+chunk_T].to(dev)          # (chunk_T,)
+            #     x_slice = self.traj[t0:t0+chunk_T].to(dev)            # (chunk_T,B,C,H,W)
+            #     x1      = self.traj[-1].to(dev).view(B, -1)           # (B,row_feats)
+
+            #     # ----- build four CPU tensors for this chunk -----
+            #     chunk_rows = len(t_slice) * B
+            #     x0_chunk   = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
+            #     dx_chunk   = torch.empty((chunk_rows, row_feats), dtype=dtype)
+            #     y_chunk    = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
+            #     dt_chunk   = torch.empty((chunk_rows, 1),        dtype=dtype)
+
+            #     inner = 0
+            #     for t_val, x in zip(t_slice, x_slice):
+            #         t = torch.full((B,1), float(t_val), device=dev, dtype=dtype)
+            #         with torch.no_grad():
+            #             dx = self.dynamics(t, x).view(B, -1).to(dtype)
+
+            #         j = inner*B ; k = j+B
+            #         x0_chunk[j:k] = torch.cat((t.cpu(),      x.view(B,-1).cpu()), 1)
+            #         dx_chunk[j:k] = dx.cpu()
+            #         y_chunk [j:k] = torch.cat((torch.ones(B,1), x1.cpu()), 1)
+            #         dt_chunk[j:k] = (1.0 - t).cpu()
+            #         inner += 1
+
+            #     # ----- stream-append this chunk to disk -----
+            #     torch.save((x0_chunk, dx_chunk, y_chunk, dt_chunk),
+            #             tmp_path, _use_new_zipfile_serialization=False)
+
+            #     offset += chunk_rows
+            #     del x_slice, t_slice, x0_chunk, dx_chunk, y_chunk, dt_chunk
+            #     torch.cuda.empty_cache()
+
+            # # ----- reopen the tmp file once & concatenate -----
+            # parts = torch.load(tmp_path, mmap=True)    # list-of-tuples, zero-copy
+            # matrix_x0 = torch.vstack([p[0] for p in parts])
+            # matrix_dx = torch.vstack([p[1] for p in parts])
+            # matrix_y  = torch.vstack([p[2] for p in parts])
+            # matrix_dt = torch.vstack([p[3] for p in parts])
+            # tmp_path.unlink()                          # clean up
+
+            # self.full_ds = TensorDataset(matrix_x0, matrix_dx, matrix_y, matrix_dt)
+            # self.cache_path.parent.mkdir(exist_ok=True, parents=True)
+            # torch.save(self.full_ds, self.cache_path)
+            # ###────────────────── end replacement ─────────────────────────
+
 
         N = len(self.full_ds)
         n_val   = int(self.val_frac * N)
