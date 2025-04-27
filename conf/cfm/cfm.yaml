@@ -8,14 +8,14 @@ traj:
   chunk_size:  2000          # if n_traj cant fit in VRAM
 
 train:
-  batch_size:          128
+  batch_size:          256
   num_workers:         4
   lr:                  2e-4
   warmup:              50
   grad_clip:           1.0
   total_steps:         400000
-  save_every_n_steps:  20000
-  log_every_n_steps:   1000
+  save_every_n_steps:  20000 
+  log_every_n_steps:   1000 
   ema_decay:           0.9999
   parallel:            false
   device:              cuda

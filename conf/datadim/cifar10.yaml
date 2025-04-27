@@ -1,0 +1,5 @@
+defaults:
+  - /dataset: cifar10
+
+# now inject the matching shape
+dim: [3, 32, 32]

@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE
 from tqdm import trange
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
-from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter
+from torchcfm.models.unet import UNetModel
+from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter, generate_trajectories
 from tqdm.auto import trange
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import Trainer
@@ -30,7 +31,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     writer = LoggingSummaryWriter()
-
     run_koop(cfg, writer)
 
 def run_cfm(cfg, writer):
@@ -52,28 +52,37 @@ def run_cfm(cfg, writer):
     #    - stage.matcher (e.g. "otcfm")
     #    - training.total_steps (e.g. 400000)
     #    - stage.traj_steps     (e.g. 100)
-    stem = f"{cfg.dataset_name}_{cfg.cfm.matcher.name}_step-{cfg.cfm.train.total_steps}"
-
+    stem = f"{cfg.dataset_name}_single_gray_{cfg.cfm.matcher.name}_step-{cfg.cfm.train.total_steps}"
     # 3) derive all file paths
     weights_path     = weights_dir     / f"{stem}.pt"
     traj_path        = traj_dir        / f"{stem}_traj_ema_{cfg.cfm.traj.traj_steps}.pth"
-    dyn_dataset_path = dyn_dataset_dir / f"{stem}_ema_pairs.pth"
-
-    net = hydra.utils.instantiate(cfg.model).to(device)
+    # dyn_dataset_path = dyn_dataset_dir / f"{stem}_ema_pairs.pth"
+    dyn_dataset_path = dyn_dataset_dir / f"{stem}.pth"
+    net = UNetModel(
+            dim             =       cfg.model.dim,
+            num_channels    =       cfg.model.num_channels,
+            num_res_blocks  =       cfg.model.num_res_blocks,
+            channel_mult    =       cfg.model.channel_mult,
+            num_heads       =       cfg.model.num_heads,
+            num_head_channels=      cfg.model.num_head_channels,
+            attention_resolutions=  cfg.model.attention_resolutions,
+            dropout         =       cfg.model.dropout,
+        ).to(device)
     wrapper_net = hydra.utils.instantiate(cfg.wrapper).to(device)
     # Check if we got a learnt velocity field
     if weights_path.exists():
         writer.add_text("cfm/weights",f"Loaded existing weights from `{weights_path}`")
+
         ckpt = torch.load(weights_path, map_location=device, weights_only=True)
-        # pick the right sub‐dict if present
-        state = ckpt.get("ema_model", ckpt)
+        state = ckpt["ema_model"]
         net.load_state_dict(state)
+
         wrapper_net.load_state_dict(state)
         log_generated_samples(writer, net, step=0, tag="cfm/loaded_samples")
 
     # Check if we have the final (t, x, v, x₁, Δt) pth
     if dyn_dataset_path.exists():
-        writer.add_text("cfm/dyn_dataset",f"\n~FAST~\nLoaded cached DynamicsDataModule from `{dyn_dataset_path}`")
+        writer.add_text("cfm/dyn_dataset",f"\n~FAST~\nLoading cached DynamicsDataModule from `{dyn_dataset_path}`")
         traj = torch.load(traj_path, map_location="cpu", weights_only=True)
         log_final_trajectories(writer, traj, tag="cfm/x1_loaded")
         dm = DynamicsDataModule(
@@ -88,6 +97,7 @@ def run_cfm(cfg, writer):
             device=cfg.cfm.train.device,
         )
         dm.setup()
+        writer.add_text("cfm/dyn_dataset",f"Returning from `run_cfm`")
         return dm
 
     # Train the velocity field on CIFAR10
@@ -128,11 +138,11 @@ def run_cfm(cfg, writer):
                 ckpt_path = weights_dir / f"{stem}_step{step}.pt"
                 torch.save(net.state_dict(),ckpt_path)
                 writer.add_text("cfm/weights",f"Saving intermediate weights to `{ckpt_path}`")
-                log_generated_samples(writer, net, step=step,tag=f"cfm/intermediate_samples_step{step}")
+                log_generated_samples(writer, net, cfg, step=step,tag=f"cfm/intermediate_samples_step{step}")
 
         torch.save(net.state_dict(), weights_path)
         writer.add_text("cfm/weights",f"Saving final weights to `{weights_path}`")
-        log_generated_samples(writer, net,step=cfg.cfm.train.total_steps,tag="cfm/final_samples")
+        log_generated_samples(writer, net, cfg, step=cfg.cfm.train.total_steps, tag="cfm/final_samples")
         wrapper_net.load_state_dict(net.state_dict())
     # else:
     # # That's a duplicate TODO: delete it
@@ -144,7 +154,7 @@ def run_cfm(cfg, writer):
     # Generate trajectories TODO: can we include this step inside the pth creation
     if not traj_path.exists():
         writer.add_text("cfm/trajectories",f"Generating trajectories which will be saved to `{traj_path}`")
-        node = NeuralODE(net, solver="dopri5", sensitivity="adjoint")
+        node = NeuralODE(net, solver="euler", sensitivity="adjoint") # Following what they use in their code i.e. not dopri
         traj_path = generate_trajectories(net, node, cfg, device, out_path=str(traj_path))
     writer.add_text("cfm/trajectories",f"Loading existing trajectories from `{traj_path}`")
     traj = torch.load(traj_path, map_location="cpu", weights_only=True)
@@ -163,15 +173,6 @@ def run_cfm(cfg, writer):
     )
     dm.setup()
     return dm
-
-def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
-    net.eval()
-    with torch.no_grad():
-        z0 = torch.randn(cfg.cfm.traj.n_traj, *cfg.model.dim, device=device)
-        t_span = torch.linspace(0,1, cfg.cfm.traj.traj_steps, device=device)
-        traj = node.trajectory(z0, t_span)
-    torch.save(traj.cpu(), out_path)
-    return out_path
 
 def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
     """
@@ -257,11 +258,12 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
         callbacks=[
             checkpoint_cb,
             ckpt_cb,
-            FIDTrainCallback(every_n_steps=50),
+            FIDTrainCallback(every_n_steps=25),
             ckpt_fid_train,
             FIDValCallback(),
             ckpt_fid_val,
         ],
+        default_root_dir=".",
         accelerator="gpu", devices=[0],
         max_epochs=cfg.koopman.train.max_epochs,
         log_every_n_steps=cfg.koopman.train.log_every_n_steps,

@@ -7,7 +7,7 @@ from time import time
 import matplotlib.pyplot as plt
 from .sampling import sample_efficient
 
-def sample_efficient_plot(model_generic, t_max=1, n_iter=100, n_samples=1, device="cuda"):
+def sample_efficient_plot(model_generic, t_max=1, n_iter=1, n_samples=64, device="cuda"):
     """
     Generates samples via sample_efficient(), saves them under generated_samples/<run_id>/,
     and plots them in a grid.

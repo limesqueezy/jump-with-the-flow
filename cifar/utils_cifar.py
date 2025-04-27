@@ -10,6 +10,7 @@
 # =============================================================================
 
 import copy
+import math
 import os
 
 import torch
@@ -56,38 +57,37 @@ def setup(
         world_size=total_num_gpus,
     )
 
-def generate_samples(model, parallel, savedir, step, net_="normal"):
-    """Save 64 generated images (8 x 8) for sanity check along training.
+# def generate_samples(model, parallel, savedir, step, net_="normal", solver="dopri5"):
+#     """Save 64 generated images (8 x 8) for sanity check along training.
 
-    Parameters
-    ----------
-    model:
-        represents the neural network that we want to generate samples from
-    parallel: bool
-        represents the parallel training flag. Torchdyn only runs on 1 GPU, we need to send the models from several GPUs to 1 GPU.
-    savedir: str
-        represents the path where we want to save the generated images
-    step: int
-        represents the current step of training
-    """
-    model.eval()
+#     Parameters
+#     ----------
+#     model:
+#         represents the neural network that we want to generate samples from
+#     parallel: bool
+#         represents the parallel training flag. Torchdyn only runs on 1 GPU, we need to send the models from several GPUs to 1 GPU.
+#     savedir: str
+#         represents the path where we want to save the generated images
+#     step: int
+#         represents the current step of training
+#     """
+#     model.eval()
 
-    model_ = copy.deepcopy(model)
-    if parallel:
-        # Send the models from GPU to CPU for inference with NeuralODE from Torchdyn
-        model_ = model_.module.to(device)
+#     model_ = copy.deepcopy(model)
+#     if parallel:
+#         # Send the models from GPU to CPU for inference with NeuralODE from Torchdyn
+#         model_ = model_.module.to(device)
 
-    node_ = NeuralODE(model_, solver="euler", sensitivity="adjoint")
-    with torch.no_grad():
-        traj = node_.trajectory(
-            torch.randn(64, 3, 32, 32, device=device),
-            t_span=torch.linspace(0, 1, 100, device=device),
-        )
-        traj = traj[-1, :].view([-1, 3, 32, 32]).clip(-1, 1)
-        traj = traj / 2 + 0.5
-    save_image(traj, savedir + f"{net_}_generated_FM_images_step_{step}.png", nrow=8)
+#     node_ = NeuralODE(model_, solver=solver, sensitivity="adjoint")
+#     with torch.no_grad():
+#         traj = node_.trajectory(
+#             torch.randn(64, 3, 32, 32, device=device),
+#             t_span=torch.linspace(0, 1, 100, device=device),
+#         )
 
-    model.train()
+#         traj = traj[-1, :].view([-1, 3, 32, 32]).clip(-1, 1)
+#         traj = traj / 2 + 0.5
+#     save_image(traj, savedir + f"{net_}_generated_FM_images_step_{step}.png", nrow=8)
 
 def ema(source, target, decay):
     source_dict = source.state_dict()
@@ -102,31 +102,34 @@ def infiniteloop(dataloader):
         for x, y in iter(dataloader):
             yield x
 
-def log_generated_samples(writer, model, step, tag="cfm/generated"):
+def log_generated_samples(writer, model, cfg, step, tag="cfm/loaded_samples", solver="euler"):
     """
     Run the learned flow on 64 random noise seeds, take
     the last timepoint [B,3,32,32] and log an 8×8 grid.
     """
     model.eval()
-    node = NeuralODE(model, solver="euler", sensitivity="adjoint")
+    node = NeuralODE(model, solver=solver, sensitivity="adjoint")
+    C, H, W  = cfg.dim
+    B = 64
     with torch.no_grad():
         # 64 random CIFAR-shaped seeds
-        z0     = torch.randn(64, 3, 32, 32, device=next(model.parameters()).device)
+        z0     = torch.randn(B, C, H, W, device=next(model.parameters()).device)
         t_span = torch.linspace(0,1,100, device=z0.device)
         traj   = node.trajectory(z0, t_span)
         imgs   = traj[-1]
         imgs   = imgs.clamp(-1, 1)
-        grid   = make_grid(imgs, nrow=8, normalize=True, value_range=(-1,1))
+        grid   = make_grid(imgs, nrow=int(math.sqrt(B)), normalize=True, value_range=(-1,1))
+        grid   = grid.detach().cpu()
+
     writer.add_image(tag, grid, global_step=step)
-    model.train()
 
 def log_final_trajectories(
     writer,
     traj: torch.Tensor,          # [T, N, C, H, W], on ANY device
     step: int = 0, # tensorboard will use step as an index so we might as well surface it
-    tag: str = "cfm/trajectory_x1",
-    num_samples: int = 20,
-    nrow: int = 5
+    tag: str = "cfm/x1_loaded",
+    num_samples: int = 64,
+    nrow: int = 8
 ):
     """
     Logs a grid of `num_samples` random final-frame images (X₁) from `traj`.
@@ -140,36 +143,47 @@ def log_final_trajectories(
     imgs = X1[idx]              # [num_samples, C, H, W]
     imgs = imgs.clamp(-1, 1)
     grid = make_grid(imgs, nrow=nrow, normalize=True, value_range=(-1, 1))
+    grid  = grid.detach().cpu()
+
     writer.add_image(tag, grid, global_step=step)
+
+# def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
+#     net.eval()
+#     n         = cfg.cfm.traj.n_traj
+#     t_steps   = cfg.cfm.traj.traj_steps
+#     chunk     = getattr(cfg.cfm.traj, "chunk_size", 500)
+#     t_span    = torch.linspace(0, 1, t_steps, device=device)
+#     all_chunks = []
+#     start = 0
+
+#     pbar = tqdm(total=n, desc="Gen trajectories", unit="traj")
+#     while start < n:
+#         end = min(start + chunk, n)
+#         try:
+#             z0 = torch.randn(end - start, *cfg.model.dim, device=device)
+#             with torch.no_grad():
+#                 c = node.trajectory(z0, t_span).detach().cpu()
+#             all_chunks.append(c)
+#             pbar.update(end - start)
+#             start = end
+#         except torch.cuda.OutOfMemoryError:
+#             torch.cuda.empty_cache()
+#             # back off chunk size
+#             chunk = max(1, chunk // 2)
+#             pbar.write(f"OOM, reducing chunk to {chunk}")
+#             # do NOT advance start; retry this slice
+#         # any other exception will bubble out
+
+#     pbar.close()
+#     traj = torch.cat(all_chunks, dim=1)
+#     torch.save(traj, out_path)
+#     return out_path
 
 def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
     net.eval()
-    n         = cfg.cfm.traj.n_traj
-    t_steps   = cfg.cfm.traj.traj_steps
-    chunk     = getattr(cfg.cfm.traj, "chunk_size", 500)
-    t_span    = torch.linspace(0, 1, t_steps, device=device)
-    all_chunks = []
-    start = 0
-
-    pbar = tqdm(total=n, desc="Gen trajectories", unit="traj")
-    while start < n:
-        end = min(start + chunk, n)
-        try:
-            z0 = torch.randn(end - start, *cfg.model.dim, device=device)
-            with torch.no_grad():
-                c = node.trajectory(z0, t_span).cpu()
-            all_chunks.append(c)
-            pbar.update(end - start)
-            start = end
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            # back off chunk size
-            chunk = max(1, chunk // 2)
-            pbar.write(f"OOM, reducing chunk to {chunk}")
-            # do NOT advance start; retry this slice
-        # any other exception will bubble out
-
-    pbar.close()
-    traj = torch.cat(all_chunks, dim=0)
-    torch.save(traj, out_path)
+    with torch.no_grad():
+        z0 = torch.randn(cfg.cfm.traj.n_traj, *cfg.model.dim, device=device)
+        t_span = torch.linspace(0,1, cfg.cfm.traj.traj_steps, device=device)
+        traj = node.trajectory(z0, t_span)
+    torch.save(traj.cpu(), out_path)
     return out_path

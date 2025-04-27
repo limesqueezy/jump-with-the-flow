@@ -1,12 +1,21 @@
+hydra:
+  run:
+    # every run will live under logs/<dataset_name>/<timestamp>
+    dir: logs/${dataset_name}/${now:%Y%m%d-%H%M%S}
+  # put Hydra’s own outputs under hydra/ instead of .hydra/
+  hydra_output_subdir: hydra
+
 defaults:
   - _self_
-  - dataset: cifar10
+  - datadim: single_gray_cifar
   - model: unet_cifar
   - model@wrapper: unet_cifar_wrapper
   - cfm: cfm
   - koopman: koopman
 
 dataset_name: cifar10
+dataset: ${datadim.dataset}
+dim:     ${datadim.dim}
 
 paths:
   raw_dir:              ./assets/raw_datasets

@@ -1,0 +1,4 @@
+defaults:
+  - /dataset: single_gray_cifar
+
+dim: [1, 32, 32]
