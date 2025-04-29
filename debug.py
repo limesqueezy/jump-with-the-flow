@@ -210,7 +210,7 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
         # pretrained_full_cifar = "assets/unet_dynamics/cifar10_otcfm_step-400000.pt"
         # ckpt = torch.load(pretrained_full_cifar, map_location=device, weights_only=True)
         # state = ckpt["ema_model"]
-        duo_gray_cifar = "assets/unet_dynamics/cifar10_single_gray_otcfm_step-20000.pt"
+        duo_gray_cifar = "assets/unet_dynamics/cifar10_double_gray_otcfm_step-20000.pt"
         state = torch.load(duo_gray_cifar, map_location=device, weights_only=True)
         wrapper_net.load_state_dict(state)
 

@@ -1,0 +1,10 @@
+_target_: jump_wtf.models.unet_wrapper.UNetWrapperKoopman
+dim:           ${dim}
+num_channels:  32
+num_res_blocks: 1
+# Supposed to be the exact defaults used
+channel_mult: [1, 2, 2]
+attention_resolutions: "16"
+num_heads: 1
+num_head_channels: -1
+dropout: 0

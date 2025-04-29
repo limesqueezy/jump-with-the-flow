@@ -14,6 +14,7 @@ from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_fina
 from tqdm.auto import trange
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import RichProgressBar
 
 from jump_wtf.utils.fid import FIDTrainCallback, FIDValCallback, compute_real_stats
 from jump_wtf.models.model import Model
@@ -47,12 +48,7 @@ def run_cfm(cfg, writer):
     traj_dir.mkdir(parents=True, exist_ok=True)
     dyn_dataset_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2) compute common stem from YAML parameters
-    #    - dataset  (e.g. "cifar10")
-    #    - stage.matcher (e.g. "otcfm")
-    #    - training.total_steps (e.g. 400000)
-    #    - stage.traj_steps     (e.g. 100)
-    stem = f"{cfg.dataset_name}_single_gray_{cfg.cfm.matcher.name}_step-{cfg.cfm.train.total_steps}"
+    stem = f"{cfg.dataset_name}_{cfg.tag}_{cfg.cfm.matcher.name}_step-{cfg.cfm.train.total_steps}"
     # 3) derive all file paths
     weights_path     = weights_dir     / f"{stem}.pt"
     traj_path        = traj_dir        / f"{stem}_traj_ema_{cfg.cfm.traj.traj_steps}.pth"
@@ -92,11 +88,11 @@ def run_cfm(cfg, writer):
             dynamics=wrapper_net,
             dynamics_path=stem,
             cache_dir=str(dyn_dataset_dir),
-            batch_size=cfg.cfm.train.batch_size,
-            t_grid=cfg.cfm.traj.traj_steps,
-            val_frac=cfg.cfm.train.val_frac,
-            chunk_steps=cfg.cfm.traj.chunk_size,
-            device=cfg.cfm.train.device,
+            batch_size=cfg.koopman.train.batch_size,
+            t_grid=cfg.koopman.train.t_grid,
+            val_frac=cfg.koopman.train.val_frac,
+            chunk_steps=cfg.koopman.train.chunk_steps,
+            device=cfg.koopman.train.device,
         )
         dm.setup()
         writer.add_text("cfm/dyn_dataset",f"Returning from `run_cfm`")
@@ -105,7 +101,7 @@ def run_cfm(cfg, writer):
     # Train the velocity field on CIFAR10
     device = torch.device(cfg.cfm.train.device if torch.cuda.is_available() else "cpu")
     if not weights_path.exists():
-        writer.add_text("cfm/weights",f"Training UNet on CIFAR10")
+        writer.add_text("cfm/weights",f"Training UNet on {cfg.dataset_name}_{cfg.tag} and will save to `{weights_path}`")
         net     = hydra.utils.instantiate(cfg.model).to(device)
         ema_net = copy.deepcopy(net).to(device)
         matcher_obj = ExactOptimalTransportConditionalFlowMatcher(sigma=cfg.cfm.matcher.sigma)
@@ -206,7 +202,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
     ).to(cfg.koopman.train.device)
     # Operator size = 1 + 2 * state_dim   (state_dim = C * H * W)
     operator_dim = 1 + 2 * state_dim
-    koopman_op   = GenericOperator_state(operator_dim).to(cfg.koopman.train.device)
+    koopman_op   = GenericOperator_state(operator_dim, cfg.koopman.operator.init_std).to(cfg.koopman.train.device)
 
     loss_fn = nn.MSELoss()
 
@@ -219,6 +215,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
         autoencoder_lr   = cfg.koopman.train.autoencoder_lr,
         lie_lr           = cfg.koopman.train.lie_lr,
         lr_scheduler     = cfg.koopman.train.lr_scheduler,
+        weight_decay     = cfg.koopman.train.weight_decay,
         decode_predict_bool = cfg.koopman.train.decode_predict,
         vae_loss_bool    = cfg.koopman.train.vae_loss,
         koop_reg_bool    = cfg.koopman.train.koop_reg,
@@ -240,7 +237,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
 
     checkpoint_cb  = ModelCheckpoint(
         dirpath=ckpt_root, filename="epoch-{epoch}",
-        save_top_k=-1, every_n_epochs=1)
+        save_top_k=-1, every_n_epochs=10)
 
     ckpt_cb        = ModelCheckpoint(
         dirpath=ckpt_root, filename="best-step{step:06d}-{train_loss_step:.4f}",
@@ -250,7 +247,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
     ckpt_fid_train = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_train", mode="min",
         filename="best-fid-train-{step:.0f}-{fid_train:.3f}",
-        save_top_k=1, every_n_train_steps=50, save_on_train_epoch_end=False)
+        save_top_k=1, every_n_train_steps=20, save_on_train_epoch_end=False)
 
     ckpt_fid_val   = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_val", mode="min",
@@ -258,14 +255,14 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
 
     trainer = Trainer(
         callbacks=[
+            RichProgressBar(),
             checkpoint_cb,
             ckpt_cb,
-            FIDTrainCallback(every_n_steps=25),
+            FIDTrainCallback(every_n_steps=20),
             ckpt_fid_train,
             FIDValCallback(),
             ckpt_fid_val,
         ],
-        default_root_dir=".",
         accelerator="gpu", devices=[0],
         max_epochs=cfg.koopman.train.max_epochs,
         log_every_n_steps=cfg.koopman.train.log_every_n_steps,

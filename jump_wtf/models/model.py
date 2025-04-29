@@ -14,7 +14,7 @@ class Model(L.LightningModule):
                  lr_scheduler, decode_predict_bool=True, 
                  vae_loss_bool=False, koop_reg_bool=False, energy_bool=False, 
                  potential_function=None,  
-                 gamma=None, delta_t = 0.01, multistep=False, period=10, time_bool=False, plot_every=50, num_iter=100, cfm_model=None, warmup_step=1000, fid_interval=500, fid_real_stats_path="assets/fid_stats/mnist/fid_stats_mnist.pt"):
+                 gamma=None, delta_t = 0.01, multistep=False, period=10, time_bool=False, plot_every=50, num_iter=100, cfm_model=None, warmup_step=1000, weight_decay = 0.0, fid_interval=500, fid_real_stats_path="assets/fid_stats/mnist/fid_stats_mnist.pt"):
         super().__init__()
         self.save_hyperparameters(ignore=["autoencoder", "koopman", "loss_function", "dynamics", "potential_function", "cfm_model"])
 
@@ -43,6 +43,7 @@ class Model(L.LightningModule):
         self.plot_every = plot_every 
         self.num_iter = num_iter
         self.cfm_model = cfm_model
+        self.weight_decay = weight_decay
         
         self.multistep = multistep
 
@@ -195,10 +196,10 @@ class Model(L.LightningModule):
 
         optimiser_autoencoder = torch.optim.Adam(self.autoencoder.parameters(),
                                          lr=learning_rate_autoencoder,
-                                         weight_decay=0) #1e-3)
+                                         weight_decay=self.weight_decay)
         optimiser_lie = torch.optim.Adam(self.koopman.parameters(),
                                  lr=learning_rate_lie,
-                                 weight_decay=0) #1e-3)
+                                 weight_decay=self.weight_decay)
         
         if self.lr_scheduler ==  "ExponentialLR":
             lie_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimiser_lie, gamma=self.gamma)

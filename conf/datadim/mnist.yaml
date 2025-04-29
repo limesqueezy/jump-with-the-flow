@@ -1,0 +1,7 @@
+defaults:
+  - /dataset: mnist
+
+dim: [1, 28, 28]
+
+dataset_name: mnist
+tag:          full

@@ -35,6 +35,7 @@ class DynamicsDataModule(L.LightningDataModule):
         self.cache_path = Path(cache_dir) / f"{dynamics_path}.pth"
 
     def setup(self, stage=None):
+        print(f"Data module from {self.cache_path}")
         if self.cache_path.exists():
             self.full_ds = torch.load(self.cache_path)
         else:

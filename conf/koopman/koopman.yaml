@@ -4,6 +4,7 @@ autoencoder:
 
 operator:
   operator_dim:   null    # will be set in code:  raw_state_dim + latent_dim
+  init_std:     0.001
 
 consume:          # how many snapshots to feed the AE
   T: 100          # same as cfm.traj.traj_steps
@@ -14,14 +15,20 @@ train:
   devices: [0]
   device: cuda
 
-  # TODO: Check those bc batch size doesn't change anything when you train
-  max_epochs:     10
+  # ─── Koopman DataModule settings ─────────────────────────────
   batch_size:     128
   num_workers:    4
+  val_frac:       0.2
+  t_grid:         ${koopman.consume.T}
+  chunk_steps:    ${cfm.traj.chunk_size}
+  # ───────────────────────────────────────────────────────────────
+
+  max_epochs:     3
 
   autoencoder_lr: 0.001
   lie_lr:         0.0001
   lr_scheduler:   ReduceLROnPlateau
+  weight_decay:   0.0
 
   gamma:          0.99
   delta_t:        0.01
@@ -38,5 +45,5 @@ train:
   warmup_step:    10
 
   fid_interval:   500
-  log_every_n_steps:                50
+  log_every_n_steps:                1
   check_val_every_n_train_steps:   200

@@ -1,0 +1,14 @@
+_target_: torchvision.datasets.MNIST
+
+root: ${paths.raw_dir}
+train: true
+download: true
+
+transform:
+  _target_: torchvision.transforms.Compose
+  transforms:
+    - _target_: torchvision.transforms.RandomHorizontalFlip
+    - _target_: torchvision.transforms.ToTensor               # → tensor in [0,1]
+    - _target_: torchvision.transforms.Normalize               # map to [-1,1]
+      mean: [0.5]
+      std:  [0.5]

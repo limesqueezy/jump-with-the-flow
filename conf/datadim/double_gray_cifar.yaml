@@ -1,0 +1,7 @@
+defaults:
+  - /dataset: double_gray_cifar
+
+dim: [1, 32, 32]
+
+dataset_name: cifar10
+tag:          double_gray
