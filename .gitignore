@@ -13,9 +13,12 @@ lightning_logs/
 *.png
 *.jpeg
 
+assets
 assets/
 checkpoints/
 generated_samples/*
+metrics/*
+logs/*
 
 runs/
 outputs/

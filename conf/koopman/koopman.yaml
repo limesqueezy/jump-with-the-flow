@@ -15,7 +15,7 @@ train:
   device: cuda
 
   # TODO: Check those bc batch size doesn't change anything when you train
-  max_epochs:     1
+  max_epochs:     10
   batch_size:     128
   num_workers:    4
 

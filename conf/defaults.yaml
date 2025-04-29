@@ -3,7 +3,7 @@ hydra:
     # every run will live under logs/<dataset_name>/<timestamp>
     dir: logs/${dataset_name}/${now:%Y%m%d-%H%M%S}
   # put Hydra’s own outputs under hydra/ instead of .hydra/
-  hydra_output_subdir: hydra
+  output_subdir: hydra
 
 defaults:
   - _self_

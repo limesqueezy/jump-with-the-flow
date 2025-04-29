@@ -74,11 +74,13 @@ def run_cfm(cfg, writer):
         writer.add_text("cfm/weights",f"Loaded existing weights from `{weights_path}`")
 
         ckpt = torch.load(weights_path, map_location=device, weights_only=True)
-        state = ckpt["ema_model"]
-        net.load_state_dict(state)
-
-        wrapper_net.load_state_dict(state)
-        log_generated_samples(writer, net, step=0, tag="cfm/loaded_samples")
+        # state = ckpt["ema_model"] TODO: commenting since I didn't save the custom CFM correctly
+        # net.load_state_dict(state)
+        # wrapper_net.load_state_dict(state)
+        net.load_state_dict(ckpt)
+        wrapper_net.load_state_dict(ckpt)
+        
+        log_generated_samples(writer, net, cfg, step=0, tag="cfm/loaded_samples")
 
     # Check if we have the final (t, x, v, x₁, Δt) pth
     if dyn_dataset_path.exists():
@@ -139,7 +141,7 @@ def run_cfm(cfg, writer):
                 torch.save(net.state_dict(),ckpt_path)
                 writer.add_text("cfm/weights",f"Saving intermediate weights to `{ckpt_path}`")
                 log_generated_samples(writer, net, cfg, step=step,tag=f"cfm/intermediate_samples_step{step}")
-
+        # TODO: YOU NEED TO SAVE BOTH EMA AND NET
         torch.save(net.state_dict(), weights_path)
         writer.add_text("cfm/weights",f"Saving final weights to `{weights_path}`")
         log_generated_samples(writer, net, cfg, step=cfg.cfm.train.total_steps, tag="cfm/final_samples")

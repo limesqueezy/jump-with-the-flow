@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 from tqdm import tqdm
 import torch
@@ -37,114 +38,135 @@ class DynamicsDataModule(L.LightningDataModule):
         if self.cache_path.exists():
             self.full_ds = torch.load(self.cache_path)
         else:
-            # temp move model to CPU
-            orig_dev = next(self.dynamics.parameters()).device
-            self.dynamics.to("cpu").eval()
+            # # temp move model to CPU
+            # orig_dev = next(self.dynamics.parameters()).device
+            # self.dynamics.to("cpu").eval()
 
-            matrix_x0 = []
-            matrix_system_derivative_data = []
-            matrix_targets = []
-            matrix_delta_t = []
+            # matrix_x0 = []
+            # matrix_system_derivative_data = []
+            # matrix_targets = []
+            # matrix_delta_t = []
 
-            # TODO: Would this happen faster on GPU? Could we do this on GPU?
+            # # TODO: Would this happen faster on GPU? Could we do this on GPU?
 
-            for i, t_val in enumerate(tqdm(self.t_grid, desc="building data")):
-                # images at time-step i, *CPU*
-                x = self.traj[i].cpu()
-                x1 = self.traj[-1].cpu()
-                B = x.shape[0]
+            # for i, t_val in enumerate(tqdm(self.t_grid, desc="building data")):
+            #     # images at time-step i, *CPU*
+            #     x = self.traj[i].cpu()
+            #     x1 = self.traj[-1].cpu()
+            #     B = x.shape[0]
 
-                # build the time channel and Δt, on CPU
-                t = torch.full((B, 1), float(t_val), device="cpu")
-                delta_t = 1.0 - t
+            #     # build the time channel and Δt, on CPU
+            #     t = torch.full((B, 1), float(t_val), device="cpu")
+            #     delta_t = 1.0 - t
 
-                # dx on CPU
-                with torch.no_grad():
-                    dx = self.dynamics(t, x)
+            #     # dx on CPU
+            #     with torch.no_grad():
+            #         dx = self.dynamics(t, x)
 
-                # assembling inputs & targets
-                matrix_x0.append(torch.hstack((t, x.reshape(B, -1))))
-                matrix_system_derivative_data.append(dx)
-                matrix_targets.append(torch.hstack((torch.ones(B,1), x1.reshape(B,-1))))
-                matrix_delta_t.append(delta_t)
+            #     # assembling inputs & targets
+            #     matrix_x0.append(torch.hstack((t, x.reshape(B, -1))))
+            #     matrix_system_derivative_data.append(dx)
+            #     matrix_targets.append(torch.hstack((torch.ones(B,1), x1.reshape(B,-1))))
+            #     matrix_delta_t.append(delta_t)
 
-            # stack into four big CPU tensors
-            matrix_x0   = torch.vstack(matrix_x0)
-            matrix_dx   = torch.vstack(matrix_system_derivative_data)
-            matrix_y    = torch.vstack(matrix_targets)
-            matrix_dt   = torch.vstack(matrix_delta_t)
+            # # stack into four big CPU tensors
+            # matrix_x0   = torch.vstack(matrix_x0)
+            # matrix_dx   = torch.vstack(matrix_system_derivative_data)
+            # matrix_y    = torch.vstack(matrix_targets)
+            # matrix_dt   = torch.vstack(matrix_delta_t)
 
-            # cache it
-            self.full_ds = TensorDataset(
-                matrix_x0, matrix_dx, matrix_y, matrix_dt
-            )
-            self.cache_path.parent.mkdir(exist_ok=True, parents=True)
-            torch.save(self.full_ds, self.cache_path)
-
-            # move dynamics back to original device
-            self.dynamics.to(orig_dev)
-            
-            # ###────────────────── fast + streaming build ──────────────────
-            # dev = torch.device(self.device)     # usually "cuda"
-            # self.dynamics.to(dev).eval()
-
-            # T, B, C, H, W = self.traj.shape
-            # row_feats     = C * H * W
-            # cols_x0y      = 1 + row_feats      # (t, x)   and   (1, x₁)
-
-            # dtype      = torch.float32                         # keep legacy precision
-            # chunk_T    = getattr(self, "chunk_steps", T)       # optional arg
-            # tmp_path   = self.cache_path.with_suffix(".tmp")   # streamed file
-            # if tmp_path.exists(): tmp_path.unlink()            # fresh run
-
-            # torch.manual_seed(0)                               # reproducible tmp names
-
-            # offset = 0
-            # for t0 in range(0, T, chunk_T):
-            #     t_slice = self.t_grid[t0:t0+chunk_T].to(dev)          # (chunk_T,)
-            #     x_slice = self.traj[t0:t0+chunk_T].to(dev)            # (chunk_T,B,C,H,W)
-            #     x1      = self.traj[-1].to(dev).view(B, -1)           # (B,row_feats)
-
-            #     # ----- build four CPU tensors for this chunk -----
-            #     chunk_rows = len(t_slice) * B
-            #     x0_chunk   = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
-            #     dx_chunk   = torch.empty((chunk_rows, row_feats), dtype=dtype)
-            #     y_chunk    = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
-            #     dt_chunk   = torch.empty((chunk_rows, 1),        dtype=dtype)
-
-            #     inner = 0
-            #     for t_val, x in zip(t_slice, x_slice):
-            #         t = torch.full((B,1), float(t_val), device=dev, dtype=dtype)
-            #         with torch.no_grad():
-            #             dx = self.dynamics(t, x).view(B, -1).to(dtype)
-
-            #         j = inner*B ; k = j+B
-            #         x0_chunk[j:k] = torch.cat((t.cpu(),      x.view(B,-1).cpu()), 1)
-            #         dx_chunk[j:k] = dx.cpu()
-            #         y_chunk [j:k] = torch.cat((torch.ones(B,1), x1.cpu()), 1)
-            #         dt_chunk[j:k] = (1.0 - t).cpu()
-            #         inner += 1
-
-            #     # ----- stream-append this chunk to disk -----
-            #     torch.save((x0_chunk, dx_chunk, y_chunk, dt_chunk),
-            #             tmp_path, _use_new_zipfile_serialization=False)
-
-            #     offset += chunk_rows
-            #     del x_slice, t_slice, x0_chunk, dx_chunk, y_chunk, dt_chunk
-            #     torch.cuda.empty_cache()
-
-            # # ----- reopen the tmp file once & concatenate -----
-            # parts = torch.load(tmp_path, mmap=True)    # list-of-tuples, zero-copy
-            # matrix_x0 = torch.vstack([p[0] for p in parts])
-            # matrix_dx = torch.vstack([p[1] for p in parts])
-            # matrix_y  = torch.vstack([p[2] for p in parts])
-            # matrix_dt = torch.vstack([p[3] for p in parts])
-            # tmp_path.unlink()                          # clean up
-
-            # self.full_ds = TensorDataset(matrix_x0, matrix_dx, matrix_y, matrix_dt)
+            # # cache it
+            # self.full_ds = TensorDataset(
+            #     matrix_x0, matrix_dx, matrix_y, matrix_dt
+            # )
             # self.cache_path.parent.mkdir(exist_ok=True, parents=True)
             # torch.save(self.full_ds, self.cache_path)
-            # ###────────────────── end replacement ─────────────────────────
+
+            # # move dynamics back to original device
+            # self.dynamics.to(orig_dev)
+            
+            ###────────────────── fast + streaming build ──────────────────
+            dev = torch.device(self.device)     # usually "cuda"
+            self.dynamics.to(dev).eval()
+
+            T, B, C, H, W = self.traj.shape
+            row_feats     = C * H * W
+            cols_x0y      = 1 + row_feats      # (t, x)   and   (dt,dx)   and    (1, x₁)
+
+            dtype      = torch.float32                         # keep legacy precision
+            chunk_T    = getattr(self, "chunk_steps", T)       # optional arg
+            tmp_path   = self.cache_path.with_suffix(".tmp")   # streamed file
+            if tmp_path.exists(): tmp_path.unlink()            # fresh run
+
+            torch.manual_seed(0)                               # reproducible tmp names
+
+            offset = 0
+            for t0 in tqdm(range(0, T, chunk_T),
+               desc="building data",
+               unit="frame",
+               total=math.ceil(T / chunk_T)):
+                
+                t_slice = self.t_grid[t0:t0+chunk_T].to(dev)          # (chunk_T,)
+                x_slice = self.traj[t0:t0+chunk_T].to(dev)            # (chunk_T,B,C,H,W)
+                x1      = self.traj[-1].to(dev).view(B, -1)           # (B,row_feats)
+
+                # build four CPU tensors for this chunk
+                chunk_rows = len(t_slice) * B
+                x0_chunk   = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
+                dx_chunk   = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
+                y_chunk    = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
+                dt_chunk   = torch.empty((chunk_rows, 1),        dtype=dtype)
+
+
+                # inner = 0
+                # for t_val, x in zip(t_slice, x_slice):
+                for inner, i in enumerate(
+                        tqdm(range(len(t_slice)),
+                            desc="   ↳ chunk",
+                            leave=False,
+                            unit="step")):
+                    t_val = t_slice[i]
+                    x     = x_slice[i]
+
+                    t = torch.full((B,1), float(t_val), device=dev, dtype=dtype)
+
+                    
+                    with torch.no_grad():
+                        dx = self.dynamics(t, x).view(B, -1).to(dtype)
+
+                    j = inner*B ; k = j+B
+                    x0_chunk[j:k] = torch.cat((t.cpu(),      x.view(B,-1).cpu()), 1)
+                    dx_chunk[j:k] = dx.cpu()
+                    y_chunk [j:k] = torch.cat((torch.ones(B,1), x1.cpu()), 1)
+                    dt_chunk[j:k] = (1.0 - t).cpu()
+                    inner += 1
+
+                # stream-append this chunk to disk
+                torch.save((x0_chunk, dx_chunk, y_chunk, dt_chunk),
+                        tmp_path, _use_new_zipfile_serialization=False)
+
+                offset += chunk_rows
+                del x_slice, t_slice, x0_chunk, dx_chunk, y_chunk, dt_chunk
+                torch.cuda.empty_cache()
+
+            parts = []
+            with open(tmp_path, "rb") as f:                  # sequential load
+                while True:
+                    try:
+                        parts.append(torch.load(f, map_location="cpu"))
+                    except EOFError:
+                        break                                # end of stream
+
+            matrix_x0 = torch.vstack([p[0] for p in parts])
+            matrix_dx = torch.vstack([p[1] for p in parts])
+            matrix_y  = torch.vstack([p[2] for p in parts])
+            matrix_dt = torch.vstack([p[3] for p in parts])
+            tmp_path.unlink()
+
+            self.full_ds = TensorDataset(matrix_x0, matrix_dx, matrix_y, matrix_dt)
+            self.cache_path.parent.mkdir(exist_ok=True, parents=True)
+            torch.save(self.full_ds, self.cache_path)
+            ###────────────────── end replacement ─────────────────────────
 
 
         N = len(self.full_ds)
