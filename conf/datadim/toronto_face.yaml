@@ -1,9 +1,9 @@
 defaults:
-  - /dataset: toronto_faces
+  - /dataset: toronto_face
 
 # image shape: 1×48×48 (TFD is grayscale 48×48)
 dim: [1, 48, 48]
 
 # remember that these flow into `${dataset_name}` and `${tag}`
-dataset_name: toronto_faces
-tag:          toronto_faces
+dataset_name: toronto_face
+tag:          toronto_face

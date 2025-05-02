@@ -1,6 +1,18 @@
 autoencoder:
-  num_channels:   32
-  num_res_blocks: 1
+  bottleneck:             true
+  dim:                    ${wrapper.dim}
+  num_channels:           ${wrapper.num_channels}
+  num_res_blocks:         ${wrapper.num_res_blocks}
+  channel_mult:           ${wrapper.channel_mult}
+  num_heads:              ${wrapper.num_heads}
+  num_head_channels:      ${wrapper.num_head_channels}
+  attention_resolutions:  ${wrapper.attention_resolutions}
+  dropout:                ${wrapper.dropout}
+  learn_sigma:            ${wrapper.learn_sigma}
+  class_cond:             ${wrapper.class_cond}
+  use_checkpoint:         ${wrapper.use_checkpoint}
+  use_fp16:               ${wrapper.use_fp16}
+  use_new_attention_order: ${wrapper.use_new_attention_order}
 
 operator:
   operator_dim:   null    # will be set in code:  raw_state_dim + latent_dim
@@ -11,12 +23,12 @@ consume:          # how many snapshots to feed the AE
   B: 2000         # same as cfm.traj.n_traj
 
 train:
-  accelerator: gpu
+  # accelerator: gpu
   devices: [0]
   device: cuda
 
   # ─── Koopman DataModule settings ─────────────────────────────
-  batch_size:     128
+  batch_size:     256
   num_workers:    4
   val_frac:       0.2
   t_grid:         ${koopman.consume.T}

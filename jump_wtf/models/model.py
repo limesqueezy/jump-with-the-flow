@@ -59,7 +59,7 @@ class Model(L.LightningModule):
         autoencoder_scheduler, lie_scheduler = self.lr_schedulers()
         tensor2d_batch_x, tensor2d_batch_x_next, targets, delta_t = batch
 
-        if (self.global_step == 0) or (self.global_step%self.plot_every==0):
+        if self.global_step%self.plot_every==0:
             
             if self.multistep == True:
                 self.compute_multistep = True
@@ -72,7 +72,8 @@ class Model(L.LightningModule):
             #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, self.time, self.time_bool, cfm_model=self.cfm_model)
             #else: 
             #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, time=None, time_dep=self.time_bool)
-            sample = sample_efficient(self, t_max=1, n_iter=100)
+            with torch.no_grad():
+                sample = sample_efficient(self, t_max=1, n_iter=100)
             sample = sample.clamp(-1, 1)
             tensorboard.add_image("sample", sample, self.global_step, dataformats="NCHW")
         
@@ -120,6 +121,7 @@ class Model(L.LightningModule):
             #hist = torchvision.transforms.functional.pil_to_tensor(hist)
             #tensorboard.add_image("hist", hist, self.global_step)
             #os.remove("/home/turan/koopman/plots/hist.png")
+
         (encoded, jvp) = \
         autograd.functional.jvp(self.autoencoder.encoder,
                                 tensor2d_batch_x,

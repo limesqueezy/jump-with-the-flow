@@ -192,8 +192,15 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
             num_res_blocks=1
         ).to("cpu")
 
-        ckpt = torch.load("assets/unet_dynamics/mnist_otcfm_epoch_20.pth", map_location=device, weights_only=True)
+        ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20.pt", map_location=device, weights_only=True)
         wrapper_net.load_state_dict(ckpt)
+
+        state_dim = C * H * W
+        ae = Autoencoder_unet(
+            dim=(C, H, W),
+            num_channels=32,
+            num_res_blocks=1,
+        )
 
     elif dataset.lower() == "cifar":
         C, H, W = 1, 32, 32 # CHANGE FOR COLOR CIFAR
@@ -214,15 +221,54 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
         state = torch.load(duo_gray_cifar, map_location=device, weights_only=True)
         wrapper_net.load_state_dict(state)
 
-    else:
-        raise ValueError("dataset must be 'mnist' or 'cifar'")
+        state_dim = C * H * W
+        ae = Autoencoder_unet(
+            dim=(C, H, W),
+            num_channels=32,
+            num_res_blocks=1,
+        )
 
-    state_dim = C * H * W
-    ae = Autoencoder_unet(
-        dim=(C, H, W),
-        num_channels=32,
-        num_res_blocks=1,
-    )
+    elif dataset.lower() == "tfd":
+        # Toronto Face Dataset (1×48×48)
+        C, H, W = 1, 48, 48
+        wrapper_net = UNetWrapperKoopman(
+            dim                 = (C, H, W),
+            num_channels        = 64,
+            num_res_blocks      = 2,
+            channel_mult        = [1, 1, 2, 3, 4],
+            num_heads           = 4,
+            num_head_channels   = 64,
+            attention_resolutions= "16",
+            dropout             = 0.1,
+        ).to(device)
+
+        # replace with the actual path to your TFD checkpoint
+        tfd_ckpt = "assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-8000.pt"
+        state = torch.load(tfd_ckpt,
+                           map_location=device,
+                           weights_only=True)
+        wrapper_net.load_state_dict(state)
+
+        state_dim = C * H * W
+        ae = Autoencoder_unet(
+            dim=(1, 48, 48),
+            num_channels=64,
+            num_res_blocks=2,
+            channel_mult=[1, 1, 2, 3, 4],
+            num_heads=4,
+            num_head_channels=64,
+            attention_resolutions="16",
+            dropout=0.1,
+            learn_sigma=False,
+            class_cond=False,
+            use_checkpoint=False,
+            use_fp16=False,
+            use_new_attention_order=False,
+        )
+
+    else:
+        raise ValueError("dataset must be 'mnist', 'cifar' or 'tfd'")
+
     koop_op = GenericOperator_state(1 + 2 * state_dim)
 
     model = Model.load_from_checkpoint(
@@ -481,7 +527,7 @@ if __name__ == "__main__":
     p.add_argument("--ckpt",     type=str, default="checkpoints/cifar10-koopman-20250427-183648/last.ckpt",
                    help="glob for Koopman checkpoints")
     p.add_argument("--dataset",  type=str, default="cifar",
-                   choices=["mnist","cifar"])
+                   choices=["mnist","cifar","tfd"])
     p.add_argument("--n-rows",type=int, default=8,
                    help="number of rows to draw")
     p.add_argument("--n-iter",   type=int, default=1,
@@ -492,7 +538,8 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     model = load_model(args.ckpt, dataset=args.dataset, device=args.device)
-    # sample_and_save_grid(model, k=args.n_rows, t_max=args.t_max, n_iter=args.n_iter, device="cuda")
+
+    sample_and_save_grid(model, k=args.n_rows, t_max=args.t_max, n_iter=args.n_iter, device="cuda")
 
     # sample_analytical_plot(model,
     #                    output_dir="metrics",
@@ -510,11 +557,11 @@ if __name__ == "__main__":
 
     # get_koop_info(K = model.koopman.operator.cpu().detach().numpy())
 
-    gif_file = animate_sample_evolution(
-        model,
-        t_max=2.0,
-        n_samples=10,
-        max_modes=1569,
-        step=5,
-        # device and output_dir are optional
-    )
+    # gif_file = animate_sample_evolution(
+    #     model,
+    #     t_max=2.0,
+    #     n_samples=10,
+    #     max_modes=1569,
+    #     step=5,
+    #     # device and output_dir are optional
+    # )

@@ -1,21 +1,28 @@
 hydra:
   run:
-    # every run will live under logs/<dataset_name>/<timestamp>
-    dir: logs/${dataset_name}/${now:%Y%m%d-%H%M%S}
+    dir: logs/${dataset_name}/${tag}/${now:%Y%m%d-%H%M%S}   # ← tag inside
+  sweep:
+    dir: multirun
   output_subdir: hydra
+
 
 defaults:
   - _self_
-  - datadim: mnist
-  - model: unet_mnist
-  - model@wrapper: unet_mnist_wrapper
+  - datadim: toronto_face
+  - model: unet_tfd
+  - model@wrapper: unet_tfd_wrapper
   - cfm: cfm
   - koopman: koopman
 
+trainer:
+  accelerator: gpu     # Lightning arg
+  devices: [0]         # single‐GPU default
+  strategy: auto       # DDP kicks in automatically if devices > 1
+
 dataset_name: ${datadim.dataset_name}
 tag:          ${datadim.tag}
-dataset: ${datadim.dataset}
-dim:     ${datadim.dim}
+dataset:      ${datadim.dataset}
+dim:          ${datadim.dim}
 
 paths:
   raw_dir:              ./assets/raw_datasets

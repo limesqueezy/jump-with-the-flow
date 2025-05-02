@@ -1,12 +1,14 @@
-_target_: torchvision.datasets.ImageFolder
-
-root: ${paths.raw_dir}/toronto_faces
+_target_: jump_wtf.data.toronto_face.TorontoFaceDataset
+root:      ${paths.raw_dir}
+train:     None
+download:  true
 
 transform:
   _target_: torchvision.transforms.Compose
   transforms:
     - _target_: torchvision.transforms.Resize
-      size: [48, 48]
+      # size: [48, 48]
+      size: [28, 28]
     - _target_: torchvision.transforms.ToTensor
     - _target_: torchvision.transforms.Normalize
       mean: [0.5]

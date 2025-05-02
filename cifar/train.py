@@ -4,6 +4,7 @@ from pathlib import Path
 from re import I
 import torch
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE
@@ -15,6 +16,7 @@ from tqdm.auto import trange
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import RichProgressBar
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from jump_wtf.utils.fid import FIDTrainCallback, FIDValCallback, compute_real_stats
 from jump_wtf.models.model import Model
@@ -24,19 +26,27 @@ from jump_wtf.models.autoencoder import Autoencoder_unet
 from jump_wtf.operators.generic import GenericOperator_state
 import torch.nn as nn
 
-# force only GPU 0 to be visible to CUDA
-os.environ["CUDA_DEVICE_ORDER"]    = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_DEVICE_ORDER"]    = "PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-@hydra.main(version_base=None, config_path="../conf", config_name="defaults")
+def main_train(cfg: DictConfig, additional_cbs=None):
+    if additional_cbs is None:
+        additional_cbs = []
+    """Reusable entrypoint for a single training run (DDP‑aware)."""
+    run_dir = Path(HydraConfig.get().runtime.output_dir)
+    writer  = LoggingSummaryWriter(log_dir=run_dir / "tensorboard")
+    return run_koop(cfg, writer, additional_cbs)
+
+@hydra.main(config_path="../conf", config_name="defaults", version_base="1.3")
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
-    writer = LoggingSummaryWriter()
-    run_koop(cfg, writer)
+    main_train(cfg)
 
 def run_cfm(cfg, writer):
 
     device = torch.device(cfg.cfm.train.device if torch.cuda.is_available() else "cpu")
+
+    run_dir = Path(HydraConfig.get().runtime.output_dir)
 
     raw_dir          = Path(cfg.paths.raw_dir)
     weights_dir      = Path(cfg.paths.unet_weights_dir)
@@ -70,9 +80,11 @@ def run_cfm(cfg, writer):
         writer.add_text("cfm/weights",f"Loaded existing weights from `{weights_path}`")
 
         ckpt = torch.load(weights_path, map_location=device, weights_only=True)
-        # state = ckpt["ema_model"] TODO: commenting since I didn't save the custom CFM correctly
+
+        # state = ckpt["ema_model"] # TODO: commenting since I didn't save the custom CFM correctly
         # net.load_state_dict(state)
         # wrapper_net.load_state_dict(state)
+
         net.load_state_dict(ckpt)
         wrapper_net.load_state_dict(ckpt)
         
@@ -95,6 +107,7 @@ def run_cfm(cfg, writer):
             device=cfg.koopman.train.device,
         )
         dm.setup()
+        # We're stalling here...
         writer.add_text("cfm/dyn_dataset",f"Returning from `run_cfm`")
         return dm
 
@@ -117,7 +130,6 @@ def run_cfm(cfg, writer):
             drop_last=True,
             pin_memory=True,
         ))
-
         for step in trange(cfg.cfm.train.total_steps, desc="CFM training"):
             x1 = next(data_iter).to(device)
             x0 = torch.randn_like(x1, device=device)
@@ -172,13 +184,20 @@ def run_cfm(cfg, writer):
     dm.setup()
     return dm
 
-def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
+def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     """
     Train (or resume) the Koopman-encoder stage *on top of* the frozen
     dynamics learned by run_cfm.  We simply reuse run_cfm() to get the
     cached DynamicsDataModule, freeze its dynamics network, and launch
     Lightning training for the Model(autoencoder, operator).
     """
+    if extra_cbs is None:
+        extra_cbs = []
+
+    run_dir = Path(HydraConfig.get().runtime.output_dir)
+    ckpt_root = run_dir / "checkpoints"
+    ckpt_root.mkdir(parents=True, exist_ok=True)
+    tb_logger = TensorBoardLogger(save_dir=run_dir, name="tensorboard")
 
     # fetch (or build) DynamicsDataModule from the previous stage
     dm = run_cfm(cfg, writer)
@@ -196,13 +215,35 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
     state_dim = C * H * W
     ae_cfg = cfg.koopman.autoencoder
     autoencoder = Autoencoder_unet(
-        dim           = (C, H, W),          # raw image shape
-        num_channels  = ae_cfg.num_channels,     # 32
-        num_res_blocks= ae_cfg.num_res_blocks,   # 1
+        **ae_cfg,
+        device=cfg.koopman.train.device
+    )
+    # =======================
+
+    C, H, W          = ae_cfg.dim             # e.g. (3,32,32)
+    mc               = ae_cfg.num_channels    # e.g. 128
+    cm_list          = list(ae_cfg.channel_mult)
+    nr               = ae_cfg.num_res_blocks
+    bneck            = ae_cfg.bottleneck      # True/False
+
+    # Plain: image + UNet_out; Bottleneck: + flattened bottleneck
+    if not bneck:
+        state_dim = 2 * C * H * W
+    else:
+        # bottleneck channels & its spatial resolution
+        cb  = cm_list[-1] * mc                # Cb
+        res = H // (2 ** (len(cm_list) - 1))   # h = H/2^(L-1)
+        state_dim = 2 * C * H * W + cb * res * res
+
+    operator_dim = 1 + state_dim
+    print(f"operator_dim = {operator_dim}")
+
+    koopman_op = GenericOperator_state(
+        operator_dim,
+        cfg.koopman.operator.init_std
     ).to(cfg.koopman.train.device)
-    # Operator size = 1 + 2 * state_dim   (state_dim = C * H * W)
-    operator_dim = 1 + 2 * state_dim
-    koopman_op   = GenericOperator_state(operator_dim, cfg.koopman.operator.init_std).to(cfg.koopman.train.device)
+
+    # =======================
 
     loss_fn = nn.MSELoss()
 
@@ -231,9 +272,9 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
         fid_real_stats_path = stats_file,
     )
 
-    run_id     = datetime.datetime.now().strftime(f"{cfg.dataset_name}-koopman-%Y%m%d-%H%M%S")
-    ckpt_root  = Path("checkpoints") / run_id
-    ckpt_root.mkdir(parents=True, exist_ok=True)
+    # run_id = f"{cfg.dataset_name}_{cfg.tag}-koopman-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    # ckpt_root  = Path("checkpoints") / run_id
+    # ckpt_root.mkdir(parents=True, exist_ok=True)
 
     checkpoint_cb  = ModelCheckpoint(
         dirpath=ckpt_root, filename="epoch-{epoch}",
@@ -262,13 +303,18 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter):
             ckpt_fid_train,
             FIDValCallback(),
             ckpt_fid_val,
+            *extra_cbs,
         ],
-        accelerator="gpu", devices=[0],
+        logger=tb_logger,
+        accelerator=cfg.trainer.accelerator,   # e.g. "gpu"
+        devices=cfg.trainer.devices,           # e.g. [0] or [0,1]
+        strategy=cfg.trainer.strategy,         # e.g. "auto" or "ddp"
+        default_root_dir=run_dir,
         max_epochs=cfg.koopman.train.max_epochs,
         log_every_n_steps=cfg.koopman.train.log_every_n_steps,
     )
     trainer.fit(model, dm)
-    return model
+    return trainer
 
 if __name__ == "__main__":
     main()

@@ -1,14 +1,15 @@
-_target_: torchvision.datasets.CIFAR10
+_target_: jump_wtf.data.cifar.CIFARWrapper
 
 root: ${paths.raw_dir}
 train: true
 download: true
 
-transform:
-  _target_: torchvision.transforms.Compose
-  transforms:
-    - _target_: torchvision.transforms.RandomHorizontalFlip
-    - _target_: torchvision.transforms.ToTensor
-    - _target_: torchvision.transforms.Normalize
-      mean: [0.5, 0.5, 0.5]
-      std:  [0.5, 0.5, 0.5]
+# if true, images become 1-channel and get [0.5]/[0.5] normalize.
+grayscale: false
+classes_to_keep: []
+
+# optionally keep only a few classes:
+# classes_to_keep: ["cat"]
+# classes_to_keep: [0, 1, 2]
+#  tweak the flip probability
+# flip_prob: 0.3

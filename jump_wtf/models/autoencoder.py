@@ -2,39 +2,56 @@ import torch
 import torch.nn as nn
 from typing import Optional
 from torchcfm.models.unet import UNetModel
+import torch.nn.functional as F
 
 # UNetModel is the wrapper from torchcfm
 class UNetModelWrapper_encoder(UNetModel):
     """
-    Thin subclass of torchcfm.models.unet.UNetModelWrapper that
-    accepts combined [B, 1 + H*W] inputs: first element is timestep,
-    rest is flattened image. Overrides only forward(); inherits
-    all constructor logic and UNetModel functionality.
+    UNet encoder with optional bottleneck augmentation.
+      • bottleneck=False → [t, flat(x), flat(UNet_out)]
+      • bottleneck=True  → [t, flat(x), flat(UNet_out), flat(bottleneck)]
     """
-    def forward(
-        self,
-        inputs: torch.Tensor,
-        y: Optional[torch.Tensor] = None,
-        *args,
-        **kwargs
-    ) -> torch.Tensor:
-        
-        timesteps = inputs[:, 0]        # [B]
-        flat      = inputs[:, 1:]       # [B, C*H*W]
-        B, L      = flat.shape
+    def __init__(self, *args, bottleneck: bool = False, **kw):
+        super().__init__(*args, **kw)
+        self.bottleneck = bottleneck
 
-        C = self.in_channels
-        H = self.image_size
-        W = self.image_size
-        x = flat.view(B, C, H, W)       # [B, C, H, W]
+        if bottleneck:
+            # hook only the bottleneck layer
+            self._feats, self._handles = [], []
+            self._handles.append(
+                self.middle_block.register_forward_hook(self._save_feat)
+            )
 
-        # Delegate to parent UNetModelWrapper.forward (which in turn calls UNetModel), y is not used since we dont use conditioning yet.
-        out = super().forward(timesteps, x, y=y, *args, **kwargs)
+    def _save_feat(self, _mod, _inp, out):
+        self._feats.append(out)
 
-        # Flatten output and concatenate with original inputs
-        out_flat = out.view(B, L)
-        return torch.hstack((inputs, out_flat))
+    def forward(self, inputs: torch.Tensor, y=None, *args, **kw):
+        # unpack
+        t    = inputs[:, :1]             # [B,1]
+        flat = inputs[:, 1:]             # [B, C*H*W]
+        B, L = flat.shape
+        C, H = self.in_channels, self.image_size
+        x    = flat.view(B, C, H, H)     # [B,C,H,H]
 
+        if self.bottleneck:
+            self._feats.clear()
+
+        # 1) run UNet to get standard output
+        unet_out = super().forward(t.squeeze(1), x, y=y, *args, **kw)
+        out_flat = unet_out.flatten(1)   # [B, C*H*W]
+
+        # 2) basic branch: [t, x, UNet_out]
+        if not self.bottleneck:
+            return torch.cat([t, flat, out_flat], dim=1)
+
+        # 3) bottleneck-augmented: also append middle_block
+        fb      = self._feats[0]             # [B, Cb, h, h]
+        fb_flat = fb.flatten(1)              # [B, Cb*h*h]
+        return torch.cat([t, flat, out_flat, fb_flat], dim=1)
+
+    def __del__(self):
+        for h in getattr(self, "_handles", []):
+            h.remove()
 
 class Decoder(nn.Module):
     def __init__(self, dim=(1, 28, 28)):
@@ -46,13 +63,12 @@ class Decoder(nn.Module):
         return tensor2d_x[:, :self.input_dimension]
 
 class Autoencoder_unet(nn.Module):
-    def __init__(self, num_channels,num_res_blocks, dim, device='cuda'):
+    def __init__(self, dim, device='cuda', **unet_kwargs):
         super().__init__()
         self.encoder = UNetModelWrapper_encoder(
-                dim=dim, 
-                num_channels=num_channels,
-                num_res_blocks=num_res_blocks
-            ).to(device)
+            dim=dim,
+            **unet_kwargs
+        ).to(device)
         self.decoder = Decoder(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

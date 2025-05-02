@@ -19,6 +19,7 @@ checkpoints/
 generated_samples/*
 metrics/*
 logs/*
+multirun*/*
 
 runs/
 outputs/

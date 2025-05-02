@@ -1,7 +1,10 @@
 defaults:
   - /dataset: cifar10
 
+# 1-channel if grayscale, otherwise 3-channel
 dim: [3, 32, 32]
 
+# rgb_full , gray_full , rgb_2cls , gray_1cls , …
+tag: rgb_full
+
 dataset_name: cifar10
-tag:          full

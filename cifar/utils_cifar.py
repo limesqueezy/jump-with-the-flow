@@ -20,7 +20,7 @@ from torchdyn.core import NeuralODE
 
 # from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid, save_image
-from tqdm import tqdm
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
@@ -131,6 +131,7 @@ def log_final_trajectories(
     num_samples: int = 64,
     nrow: int = 8
 ):
+    writer.add_text("cfm/log_final_traj",f"logging final trajectories for debugging...")
     """
     Logs a grid of `num_samples` random final-frame images (X₁) from `traj`.
     """
@@ -147,43 +148,54 @@ def log_final_trajectories(
 
     writer.add_image(tag, grid, global_step=step)
 
-# def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
-#     net.eval()
-#     n         = cfg.cfm.traj.n_traj
-#     t_steps   = cfg.cfm.traj.traj_steps
-#     chunk     = getattr(cfg.cfm.traj, "chunk_size", 500)
-#     t_span    = torch.linspace(0, 1, t_steps, device=device)
-#     all_chunks = []
-#     start = 0
-
-#     pbar = tqdm(total=n, desc="Gen trajectories", unit="traj")
-#     while start < n:
-#         end = min(start + chunk, n)
-#         try:
-#             z0 = torch.randn(end - start, *cfg.model.dim, device=device)
-#             with torch.no_grad():
-#                 c = node.trajectory(z0, t_span).detach().cpu()
-#             all_chunks.append(c)
-#             pbar.update(end - start)
-#             start = end
-#         except torch.cuda.OutOfMemoryError:
-#             torch.cuda.empty_cache()
-#             # back off chunk size
-#             chunk = max(1, chunk // 2)
-#             pbar.write(f"OOM, reducing chunk to {chunk}")
-#             # do NOT advance start; retry this slice
-#         # any other exception will bubble out
-
-#     pbar.close()
-#     traj = torch.cat(all_chunks, dim=1)
-#     torch.save(traj, out_path)
-#     return out_path
+    writer.add_text("cfm/log_final_traj",f"logged final trajectories")
 
 def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
+    """
+    Stream-generates trajectories with a single Rich progress bar and
+    automatic OOM backoff (halving chunk_size on OOM).
+    """
     net.eval()
-    with torch.no_grad():
-        z0 = torch.randn(cfg.cfm.traj.n_traj, *cfg.model.dim, device=device)
-        t_span = torch.linspace(0,1, cfg.cfm.traj.traj_steps, device=device)
-        traj = node.trajectory(z0, t_span)
-    torch.save(traj.cpu(), out_path)
+    torch.cuda.empty_cache()
+
+    n_traj     = cfg.cfm.traj.n_traj
+    chunk_size = getattr(cfg.cfm.traj, "chunk_size", n_traj) or n_traj
+    t_span     = torch.linspace(0, 1, cfg.cfm.traj.traj_steps, device=device)
+
+    chunks = []
+    start = 0
+
+    # Single, clean Rich bar
+    progress = Progress(
+        SpinnerColumn(style="cyan"),
+        TextColumn("[bold green]{task.description}"),
+        BarColumn(bar_width=None, complete_style="green"),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+
+    with progress:
+        task = progress.add_task("Generating trajectories", total=n_traj)
+        while start < n_traj:
+            end = min(start + chunk_size, n_traj)
+            try:
+                progress.update(task, description=f"chunk_size={chunk_size}")
+                z0 = torch.randn(end - start, *cfg.model.dim, device=device)
+                with torch.no_grad():
+                    traj_chunk = node.trajectory(z0, t_span)
+                chunks.append(traj_chunk.cpu())
+                progress.update(task, advance=(end - start))
+                start = end
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower() and chunk_size > 1:
+                    torch.cuda.empty_cache()
+                    chunk_size = max(1, chunk_size // 2)
+                    progress.log(f"[red]OOM: reducing chunk_size → {chunk_size}")
+                else:
+                    raise
+
+    traj = torch.cat(chunks, dim=1)
+    torch.save(traj, out_path)
+    progress.log(f"[bold green]Saved trajectories to {out_path}")
     return out_path

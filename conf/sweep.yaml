@@ -1,0 +1,38 @@
+# conf/sweep.yaml
+version_base: "1.2"          # silence “version_base not specified”
+
+# 1) Pull in your project defaults, then immediately switch to OptunaSweeper
+defaults:
+  - _self_
+
+  # normal defaults
+  - datadim: mnist
+  - model: unet_mnist
+  - model@wrapper: unet_mnist_wrapper
+  - cfm: cfm
+  - koopman: koopman
+
+dataset_name: ${datadim.dataset_name}
+tag:          ${datadim.tag}
+dataset:      ${datadim.dataset}
+dim:          ${datadim.dim}
+
+extra_callbacks: []
+
+paths:
+  raw_dir:              ./assets/raw_datasets
+  unet_weights_dir:     ./assets/unet_dynamics
+  traj_dir:             ./assets/dynamics_datasets/intermediate_traj
+  dyn_dataset_dir:      ./assets/dynamics_datasets
+  output_dir:           ${paths.unet_weights_dir}
+
+trainer:
+  accelerator: gpu
+  devices: [0,1]
+  strategy: ddp
+
+# 2) Now configure Hydra’s Optuna plugin
+hydra:
+  run:
+    dir: multirun_optuna/${dataset_name}/${tag}/${now:%Y%m%d-%H%M%S}
+  output_subdir: hydra

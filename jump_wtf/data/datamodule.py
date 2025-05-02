@@ -21,6 +21,7 @@ class DynamicsDataModule(L.LightningDataModule):
         t_grid: int = 100,
         val_frac: float = 0.2,
         chunk_steps: int = 2000,
+        eval_chunk: int = 2048,
         device = "cuda"
     ):
         super().__init__()
@@ -30,6 +31,7 @@ class DynamicsDataModule(L.LightningDataModule):
         self.t_grid     = torch.linspace(0, 1, t_grid)
         self.val_frac   = val_frac
         self.chunk_steps= chunk_steps
+        self.eval_chunk = eval_chunk
         self.device     = device
 
         self.cache_path = Path(cache_dir) / f"{dynamics_path}.pth"
@@ -87,7 +89,7 @@ class DynamicsDataModule(L.LightningDataModule):
             # self.dynamics.to(orig_dev)
             
             ###────────────────── fast + streaming build ──────────────────
-            dev = torch.device(self.device)     # usually "cuda"
+            dev = torch.device(self.device)
             self.dynamics.to(dev).eval()
 
             T, B, C, H, W = self.traj.shape
@@ -109,7 +111,7 @@ class DynamicsDataModule(L.LightningDataModule):
                 
                 t_slice = self.t_grid[t0:t0+chunk_T].to(dev)          # (chunk_T,)
                 x_slice = self.traj[t0:t0+chunk_T].to(dev)            # (chunk_T,B,C,H,W)
-                x1      = self.traj[-1].to(dev).view(B, -1)           # (B,row_feats)
+                x1      = self.traj[-1].cpu().view(B, -1)           # (B,row_feats)
 
                 # build four CPU tensors for this chunk
                 chunk_rows = len(t_slice) * B
@@ -127,19 +129,25 @@ class DynamicsDataModule(L.LightningDataModule):
                             leave=False,
                             unit="step")):
                     t_val = t_slice[i]
-                    x     = x_slice[i]
+                    x_T   = x_slice[i]                     # (B, C, H, W)
 
-                    t = torch.full((B,1), float(t_val), device=dev, dtype=dtype)
+                    for b0 in range(0, B, self.eval_chunk):
+                        b1 = min(b0 + self.eval_chunk, B)
 
-                    
-                    with torch.no_grad():
-                        dx = self.dynamics(t, x).view(B, -1).to(dtype)
+                        x  = x_T[b0:b1].to(dev)            # (b, C, H, W)
+                        t  = torch.full((b1-b0, 1), float(t_val), device=dev, dtype=dtype)
 
-                    j = inner*B ; k = j+B
-                    x0_chunk[j:k] = torch.cat((t.cpu(),      x.view(B,-1).cpu()), 1)
-                    dx_chunk[j:k] = dx.cpu()
-                    y_chunk [j:k] = torch.cat((torch.ones(B,1), x1.cpu()), 1)
-                    dt_chunk[j:k] = (1.0 - t).cpu()
+                        with torch.no_grad():
+                            dx = self.dynamics(t, x).view(b1-b0, -1).to(dtype)
+
+                        # write into pre-allocated CPU chunk
+                        j = inner * B + b0
+                        k = j + (b1 - b0)
+                        x0_chunk[j:k] = torch.cat((t.cpu(), x.view(b1-b0, -1).cpu()), 1)
+                        dx_chunk[j:k] = dx.cpu()
+                        y_chunk [j:k] = torch.cat((torch.ones(b1-b0,1), x1[b0:b1]), 1)
+                        dt_chunk[j:k] = (1.0 - t).cpu()
+
                     inner += 1
 
                 # stream-append this chunk to disk
