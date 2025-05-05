@@ -16,7 +16,11 @@ def loss(model, tensor2d_x: torch.Tensor,
          potential_function = None,
          delta_t=0.01,
          period=10,
-         multistep_loss_bool=False, time_bool=False, n_iter=100, cfm_model=None, device='cuda'):    ######## MODIFICATION HERE ############
+         multistep_loss_bool=False, 
+         time_bool=False, n_iter=100, 
+         grad_phase_weight_factor: float = 0.0,
+         cfm_model=None, 
+         device='cuda'):
     lie_operator = model.koopman
     autoencoder = model.autoencoder
 
@@ -161,7 +165,7 @@ def loss(model, tensor2d_x: torch.Tensor,
         energy_loss_term = energy_loss(
             model, tensor2d_x, 0.01, output_dim, potential_function
         )
-        total_loss = (
+        orig_loss = (
             0.2 * reconstructed
             + 0.6 * grad_phase
             + 0.2 * decode_predict
@@ -172,7 +176,7 @@ def loss(model, tensor2d_x: torch.Tensor,
         )
     else:
         energy_loss_term = 0
-        total_loss = (
+        orig_loss = (
             0.2 * reconstructed
             + grad_phase
             + 0.1 * vae_loss
@@ -186,6 +190,8 @@ def loss(model, tensor2d_x: torch.Tensor,
     #     p.requires_grad = True
     # for p in autoencoder.encoder.parameters():
     #     p.requires_grad = True
+
+    total_loss = grad_phase_weight_factor * grad_phase + (1.0 - grad_phase_weight_factor) * orig_loss
 
     # TODO: Implement loss
     return (

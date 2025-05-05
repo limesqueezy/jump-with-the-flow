@@ -1,5 +1,5 @@
 autoencoder:
-  bottleneck:             true
+  bottleneck:             false
   dim:                    ${wrapper.dim}
   num_channels:           ${wrapper.num_channels}
   num_res_blocks:         ${wrapper.num_res_blocks}
@@ -20,7 +20,7 @@ operator:
 
 consume:          # how many snapshots to feed the AE
   T: 100          # same as cfm.traj.traj_steps
-  B: 2000         # same as cfm.traj.n_traj
+  B: 6000         # same as cfm.traj.n_traj
 
 train:
   # accelerator: gpu
@@ -40,10 +40,16 @@ train:
   autoencoder_lr: 0.001
   lie_lr:         0.0001
   lr_scheduler:   ReduceLROnPlateau
-  weight_decay:   0.0
+  weight_decay:   0.0 # This is only for the autoencoder, Operator is harcoded to 0
 
   gamma:          0.99
   delta_t:        0.01
+
+  # Need those for LinearWarmupCosineAnnealingLR
+  eta_min_frac:       0.2
+  warmup_start_frac:  0.1
+
+  grad_phase_weight_factor: 0.0
 
   decode_predict: true
   vae_loss:       false

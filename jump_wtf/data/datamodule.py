@@ -41,54 +41,6 @@ class DynamicsDataModule(L.LightningDataModule):
         if self.cache_path.exists():
             self.full_ds = torch.load(self.cache_path)
         else:
-            # # temp move model to CPU
-            # orig_dev = next(self.dynamics.parameters()).device
-            # self.dynamics.to("cpu").eval()
-
-            # matrix_x0 = []
-            # matrix_system_derivative_data = []
-            # matrix_targets = []
-            # matrix_delta_t = []
-
-            # # TODO: Would this happen faster on GPU? Could we do this on GPU?
-
-            # for i, t_val in enumerate(tqdm(self.t_grid, desc="building data")):
-            #     # images at time-step i, *CPU*
-            #     x = self.traj[i].cpu()
-            #     x1 = self.traj[-1].cpu()
-            #     B = x.shape[0]
-
-            #     # build the time channel and Δt, on CPU
-            #     t = torch.full((B, 1), float(t_val), device="cpu")
-            #     delta_t = 1.0 - t
-
-            #     # dx on CPU
-            #     with torch.no_grad():
-            #         dx = self.dynamics(t, x)
-
-            #     # assembling inputs & targets
-            #     matrix_x0.append(torch.hstack((t, x.reshape(B, -1))))
-            #     matrix_system_derivative_data.append(dx)
-            #     matrix_targets.append(torch.hstack((torch.ones(B,1), x1.reshape(B,-1))))
-            #     matrix_delta_t.append(delta_t)
-
-            # # stack into four big CPU tensors
-            # matrix_x0   = torch.vstack(matrix_x0)
-            # matrix_dx   = torch.vstack(matrix_system_derivative_data)
-            # matrix_y    = torch.vstack(matrix_targets)
-            # matrix_dt   = torch.vstack(matrix_delta_t)
-
-            # # cache it
-            # self.full_ds = TensorDataset(
-            #     matrix_x0, matrix_dx, matrix_y, matrix_dt
-            # )
-            # self.cache_path.parent.mkdir(exist_ok=True, parents=True)
-            # torch.save(self.full_ds, self.cache_path)
-
-            # # move dynamics back to original device
-            # self.dynamics.to(orig_dev)
-            
-            ###────────────────── fast + streaming build ──────────────────
             dev = torch.device(self.device)
             self.dynamics.to(dev).eval()
 
@@ -175,8 +127,6 @@ class DynamicsDataModule(L.LightningDataModule):
             self.full_ds = TensorDataset(matrix_x0, matrix_dx, matrix_y, matrix_dt)
             self.cache_path.parent.mkdir(exist_ok=True, parents=True)
             torch.save(self.full_ds, self.cache_path)
-            ###────────────────── end replacement ─────────────────────────
-
 
         N = len(self.full_ds)
         n_val   = int(self.val_frac * N)

@@ -28,7 +28,7 @@ paths:
 
 trainer:
   accelerator: gpu
-  devices: [0,1]
+  devices: [0,1,2]
   strategy: ddp
 
 # 2) Now configure Hydra’s Optuna plugin

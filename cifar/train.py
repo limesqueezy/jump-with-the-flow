@@ -39,7 +39,7 @@ def main_train(cfg: DictConfig, additional_cbs=None):
 
 @hydra.main(config_path="../conf", config_name="defaults", version_base="1.3")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    print(OmegaConf.to_yaml(cfg), flush=True)
     main_train(cfg)
 
 def run_cfm(cfg, writer):
@@ -81,12 +81,12 @@ def run_cfm(cfg, writer):
 
         ckpt = torch.load(weights_path, map_location=device, weights_only=True)
 
-        # state = ckpt["ema_model"] # TODO: commenting since I didn't save the custom CFM correctly
-        # net.load_state_dict(state)
-        # wrapper_net.load_state_dict(state)
+        state = ckpt["ema_model"] # TODO: commenting since I didn't save the custom CFM correctly
+        net.load_state_dict(state)
+        wrapper_net.load_state_dict(state)
 
-        net.load_state_dict(ckpt)
-        wrapper_net.load_state_dict(ckpt)
+        # net.load_state_dict(ckpt)
+        # wrapper_net.load_state_dict(ckpt)
         
         log_generated_samples(writer, net, cfg, step=0, tag="cfm/loaded_samples")
 
@@ -269,6 +269,9 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
         num_iter         = cfg.koopman.train.num_iter,
         warmup_step      = cfg.koopman.train.warmup_step,
         fid_interval     = cfg.koopman.train.fid_interval,
+        grad_phase_weight_factor = cfg.koopman.train.grad_phase_weight_factor,
+        eta_min_frac     =  cfg.koopman.train.eta_min_frac,
+        warmup_start_frac=  cfg.koopman.train.warmup_start_frac,
         fid_real_stats_path = stats_file,
     )
 
@@ -296,7 +299,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
 
     trainer = Trainer(
         callbacks=[
-            RichProgressBar(),
+            RichProgressBar(refresh_rate=1),
             checkpoint_cb,
             ckpt_cb,
             FIDTrainCallback(every_n_steps=20),

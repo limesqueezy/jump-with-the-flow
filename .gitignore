@@ -25,3 +25,5 @@ runs/
 outputs/
 .qodo
 tb.out
+koopman_sweep.db
+logs

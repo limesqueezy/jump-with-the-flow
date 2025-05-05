@@ -5,6 +5,7 @@ import torch.autograd as autograd
 from jump_wtf.losses.koopman_loss import loss
 from jump_wtf.utils.sampling import sample_efficient
 from torchmetrics.image.fid import FrechetInceptionDistance
+from flash.core.optimizers import LinearWarmupCosineAnnealingLR
 from jump_wtf.utils.fid import make_fid_metric, compute_real_stats
 import debugpy
 
@@ -14,7 +15,7 @@ class Model(L.LightningModule):
                  lr_scheduler, decode_predict_bool=True, 
                  vae_loss_bool=False, koop_reg_bool=False, energy_bool=False, 
                  potential_function=None,  
-                 gamma=None, delta_t = 0.01, multistep=False, period=10, time_bool=False, plot_every=50, num_iter=100, cfm_model=None, warmup_step=1000, weight_decay = 0.0, fid_interval=500, fid_real_stats_path="assets/fid_stats/mnist/fid_stats_mnist.pt"):
+                 gamma=None, delta_t = 0.01, multistep=False, period=10, time_bool=False, plot_every=50, num_iter=100, cfm_model=None, warmup_step=1000, weight_decay = 0.0, fid_interval=500, grad_phase_weight_factor=0.0, eta_min_frac = 0.2, warmup_start_frac = 0.1, fid_real_stats_path="assets/fid_stats/mnist/fid_stats_mnist.pt"):
         super().__init__()
         self.save_hyperparameters(ignore=["autoencoder", "koopman", "loss_function", "dynamics", "potential_function", "cfm_model"])
 
@@ -44,6 +45,9 @@ class Model(L.LightningModule):
         self.num_iter = num_iter
         self.cfm_model = cfm_model
         self.weight_decay = weight_decay
+        self.grad_phase_weight_factor = grad_phase_weight_factor
+        self.eta_min_frac = eta_min_frac
+        self.warmup_start_frac = warmup_start_frac
         
         self.multistep = multistep
 
@@ -143,7 +147,9 @@ class Model(L.LightningModule):
                 delta_t=self.delta_t, koop_reg_bool=self.koop_reg,
                 energy_bool=self.energy_bool, 
                 potential_function=self.potential_function, multistep_loss_bool=self.compute_multistep, period=self.period, 
-                time_bool=self.time_bool, n_iter=self.num_iter, cfm_model=self.cfm_model
+                time_bool=self.time_bool, n_iter=self.num_iter, 
+                grad_phase_weight_factor = self.grad_phase_weight_factor,
+                cfm_model=self.cfm_model
             )
         
         torch.nn.utils.clip_grad_norm_(self.autoencoder.parameters(), max_norm=0.5)
@@ -201,7 +207,7 @@ class Model(L.LightningModule):
                                          weight_decay=self.weight_decay)
         optimiser_lie = torch.optim.Adam(self.koopman.parameters(),
                                  lr=learning_rate_lie,
-                                 weight_decay=self.weight_decay)
+                                 weight_decay=0)
         
         if self.lr_scheduler ==  "ExponentialLR":
             lie_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimiser_lie, gamma=self.gamma)
@@ -209,12 +215,34 @@ class Model(L.LightningModule):
             return [optimiser_autoencoder, optimiser_lie], [autoencoder_scheduler, lie_scheduler]
 
         elif self.lr_scheduler == "CosineAnnealingWarmRestarts":
-        
-            lie_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser_lie, T_0=4500, T_mult=2)
+            lie_scheduler =         torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser_lie, T_0=4500, T_mult=2)
             autoencoder_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser_autoencoder, T_0=4500, T_mult=2)
             return [optimiser_autoencoder, optimiser_lie], [autoencoder_scheduler, lie_scheduler]
         
         elif self.lr_scheduler == "ReduceLROnPlateau":
-            lie_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser_lie, patience=100, threshold=1e-3, factor=0.995)
+            lie_scheduler =         torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser_lie, patience=100, threshold=1e-3, factor=0.995)
             autoencoder_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser_autoencoder, patience=100, threshold=1e-3, factor=0.995)
             return [optimiser_autoencoder, optimiser_lie], [autoencoder_scheduler, lie_scheduler]
+        
+        elif self.lr_scheduler == "LinearWarmupCosineAnnealingLR":
+            # work out warm‑up length and floor LR
+            total_epochs   = self.trainer.max_epochs
+            warmup_epochs = getattr(self, "warmup_step", max(1, int(0.05 * total_epochs)))          
+
+            eta_frac   = getattr(self, "eta_min_frac", 0.20)       # default 20 %
+            start_frac = getattr(self, "warmup_start_frac", 0.10)  # default 10 %
+
+            eta_min_ae  = learning_rate_autoencoder  * eta_frac
+            eta_min_lie = learning_rate_lie * eta_frac
+            start_lr_ae  = learning_rate_autoencoder  * start_frac
+            start_lr_lie = learning_rate_lie * start_frac
+
+            sched_ae  = LinearWarmupCosineAnnealingLR(
+                optimiser_autoencoder,  warmup_epochs, total_epochs, start_lr_ae,  eta_min_ae)
+            sched_lie = LinearWarmupCosineAnnealingLR(
+                optimiser_lie, warmup_epochs, total_epochs, start_lr_lie, eta_min_lie)
+
+            return [optimiser_autoencoder, optimiser_lie], [sched_ae, sched_lie]
+
+        else:
+            raise ValueError(f"Unknown lr_scheduler '{self.lr_scheduler}'.")

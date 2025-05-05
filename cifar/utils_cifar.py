@@ -155,8 +155,17 @@ def generate_trajectories(net, node, cfg, device, out_path="trajectories.pth"):
     Stream-generates trajectories with a single Rich progress bar and
     automatic OOM backoff (halving chunk_size on OOM).
     """
+
     net.eval()
     torch.cuda.empty_cache()
+
+    net     = net.to(device)
+    node    = node.to(device)
+
+    # DataParallel later:
+    # if len(devices) > 1:
+    #     net  = torch.nn.DataParallel(net,  device_ids=devices, output_device=primary)
+    #     node = torch.nn.DataParallel(node, device_ids=devices, output_device=primary)
 
     n_traj     = cfg.cfm.traj.n_traj
     chunk_size = getattr(cfg.cfm.traj, "chunk_size", n_traj) or n_traj

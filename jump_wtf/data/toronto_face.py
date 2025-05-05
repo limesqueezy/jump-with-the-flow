@@ -53,7 +53,7 @@ class TorontoFaceDataset(VisionDataset):
             target = self.target_transform(target)
 
         # Return label exactly as stored (None or int) <-- this will cause errors to our loader
-        return img #, target
+        return img, target
 
     def extra_repr(self):
         return f"Split: {'train' if len(self.data)>0 else 'test'}"
