@@ -5,7 +5,7 @@ import torch.autograd as autograd
 from jump_wtf.losses.koopman_loss import loss
 from jump_wtf.utils.sampling import sample_efficient
 from torchmetrics.image.fid import FrechetInceptionDistance
-from flash.core.optimizers import LinearWarmupCosineAnnealingLR
+# from flash.core.optimizers import LinearWarmupCosineAnnealingLR
 from jump_wtf.utils.fid import make_fid_metric, compute_real_stats
 import debugpy
 
@@ -50,6 +50,7 @@ class Model(L.LightningModule):
         self.warmup_start_frac = warmup_start_frac
         
         self.multistep = multistep
+        self.compute_multistep = False
 
         self.fid_interval = fid_interval
 
@@ -63,7 +64,7 @@ class Model(L.LightningModule):
         autoencoder_scheduler, lie_scheduler = self.lr_schedulers()
         tensor2d_batch_x, tensor2d_batch_x_next, targets, delta_t = batch
 
-        if self.global_step%self.plot_every==0:
+        if (self.global_step == 0) or (self.global_step%self.plot_every==0):
             
             if self.multistep == True:
                 self.compute_multistep = True
@@ -224,25 +225,25 @@ class Model(L.LightningModule):
             autoencoder_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser_autoencoder, patience=100, threshold=1e-3, factor=0.995)
             return [optimiser_autoencoder, optimiser_lie], [autoencoder_scheduler, lie_scheduler]
         
-        elif self.lr_scheduler == "LinearWarmupCosineAnnealingLR":
-            # work out warm‑up length and floor LR
-            total_epochs   = self.trainer.max_epochs
-            warmup_epochs = getattr(self, "warmup_step", max(1, int(0.05 * total_epochs)))          
+        # elif self.lr_scheduler == "LinearWarmupCosineAnnealingLR":
+        #     # work out warm‑up length and floor LR
+        #     total_epochs   = self.trainer.max_epochs
+        #     warmup_epochs = getattr(self, "warmup_step", max(1, int(0.05 * total_epochs)))          
 
-            eta_frac   = getattr(self, "eta_min_frac", 0.20)       # default 20 %
-            start_frac = getattr(self, "warmup_start_frac", 0.10)  # default 10 %
+        #     eta_frac   = getattr(self, "eta_min_frac", 0.20)       # default 20 %
+        #     start_frac = getattr(self, "warmup_start_frac", 0.10)  # default 10 %
 
-            eta_min_ae  = learning_rate_autoencoder  * eta_frac
-            eta_min_lie = learning_rate_lie * eta_frac
-            start_lr_ae  = learning_rate_autoencoder  * start_frac
-            start_lr_lie = learning_rate_lie * start_frac
+        #     eta_min_ae  = learning_rate_autoencoder  * eta_frac
+        #     eta_min_lie = learning_rate_lie * eta_frac
+        #     start_lr_ae  = learning_rate_autoencoder  * start_frac
+        #     start_lr_lie = learning_rate_lie * start_frac
 
-            sched_ae  = LinearWarmupCosineAnnealingLR(
-                optimiser_autoencoder,  warmup_epochs, total_epochs, start_lr_ae,  eta_min_ae)
-            sched_lie = LinearWarmupCosineAnnealingLR(
-                optimiser_lie, warmup_epochs, total_epochs, start_lr_lie, eta_min_lie)
+        #     sched_ae  = LinearWarmupCosineAnnealingLR(
+        #         optimiser_autoencoder,  warmup_epochs, total_epochs, start_lr_ae,  eta_min_ae)
+        #     sched_lie = LinearWarmupCosineAnnealingLR(
+        #         optimiser_lie, warmup_epochs, total_epochs, start_lr_lie, eta_min_lie)
 
-            return [optimiser_autoencoder, optimiser_lie], [sched_ae, sched_lie]
+        #     return [optimiser_autoencoder, optimiser_lie], [sched_ae, sched_lie]
 
         else:
             raise ValueError(f"Unknown lr_scheduler '{self.lr_scheduler}'.")

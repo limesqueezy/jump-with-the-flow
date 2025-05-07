@@ -14,15 +14,18 @@ from torchcfm.models.unet import UNetModel
 from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter, generate_trajectories
 from tqdm.auto import trange
 from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import RichProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
+from lightning.pytorch import Trainer
+from lightning.pytorch.strategies import FSDPStrategy
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from functools import partial
 
 from jump_wtf.utils.fid import FIDTrainCallback, FIDValCallback, compute_real_stats
 from jump_wtf.models.model import Model
 from jump_wtf.models.unet_wrapper import UNetWrapperKoopman
 from jump_wtf.data.datamodule import DynamicsDataModule
-from jump_wtf.models.autoencoder import Autoencoder_unet
+from jump_wtf.models.autoencoder import Autoencoder_unet, UNetModelWrapper_encoder
 from jump_wtf.operators.generic import GenericOperator_state
 import torch.nn as nn
 
@@ -179,6 +182,7 @@ def run_cfm(cfg, writer):
         batch_size=cfg.cfm.train.batch_size,
         t_grid=cfg.cfm.traj.traj_steps,
         chunk_steps=cfg.cfm.traj.chunk_size,
+        shard_size_mib=cfg.koopman.train.shard_size_mib,
         val_frac=cfg.cfm.train.val_frac,
     )
     dm.setup()
@@ -218,32 +222,16 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
         **ae_cfg,
         device=cfg.koopman.train.device
     )
-    # =======================
 
-    C, H, W          = ae_cfg.dim             # e.g. (3,32,32)
-    mc               = ae_cfg.num_channels    # e.g. 128
-    cm_list          = list(ae_cfg.channel_mult)
-    nr               = ae_cfg.num_res_blocks
-    bneck            = ae_cfg.bottleneck      # True/False
-
-    # Plain: image + UNet_out; Bottleneck: + flattened bottleneck
-    if not bneck:
-        state_dim = 2 * C * H * W
-    else:
-        # bottleneck channels & its spatial resolution
-        cb  = cm_list[-1] * mc                # Cb
-        res = H // (2 ** (len(cm_list) - 1))   # h = H/2^(L-1)
-        state_dim = 2 * C * H * W + cb * res * res
-
+    state_dim   = autoencoder.encoder.output_dim - 1   # strip the t column
     operator_dim = 1 + state_dim
+
     print(f"operator_dim = {operator_dim}")
 
     koopman_op = GenericOperator_state(
         operator_dim,
         cfg.koopman.operator.init_std
     ).to(cfg.koopman.train.device)
-
-    # =======================
 
     loss_fn = nn.MSELoss()
 
@@ -296,6 +284,15 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     ckpt_fid_val   = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_val", mode="min",
         filename="best-fid-val-{epoch:03d}-{fid_val:.3f}", save_top_k=1)
+    
+    # wrap = partial(transformer_auto_wrap_policy,
+    #            transformer_layer_cls={UNetModelWrapper_encoder})  # <- here
+
+    # fsdp = FSDPStrategy(
+    #         auto_wrap_policy=wrap,
+    #         activation_checkpointing=[UNetModelWrapper_encoder],  # optional
+    #         cpu_offload=False,
+    # )
 
     trainer = Trainer(
         callbacks=[
@@ -311,12 +308,21 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
         logger=tb_logger,
         accelerator=cfg.trainer.accelerator,   # e.g. "gpu"
         devices=cfg.trainer.devices,           # e.g. [0] or [0,1]
-        strategy=cfg.trainer.strategy,         # e.g. "auto" or "ddp"
+        # strategy=cfg.trainer.strategy,         # e.g. "auto" or "ddp"
+        # precision=cfg.trainer.precision,           # 16-bit
+        # strategy=fsdp,
         default_root_dir=run_dir,
         max_epochs=cfg.koopman.train.max_epochs,
         log_every_n_steps=cfg.koopman.train.log_every_n_steps,
     )
-    trainer.fit(model, dm)
+
+    ckpt_candidate = cfg.koopman.train.resume_ckpt
+    if ckpt_candidate:
+        ckpt_path = str(Path(ckpt_candidate).expanduser())
+    else:
+        ckpt_path = None
+
+    trainer.fit(model, dm, ckpt_path=ckpt_path)
     return trainer
 
 if __name__ == "__main__":

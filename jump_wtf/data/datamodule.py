@@ -9,6 +9,9 @@ from .samplers import TimeGroupedSampler, ListSampler
 from pathlib import Path
 from typing import Union
 
+import numpy as np, json, bisect, math
+from numpy.lib.format import open_memmap
+
 class DynamicsDataModule(L.LightningDataModule):
     """Builds the (t, x, v, x₁, Δt) tuples once and serves them epoch‑after‑epoch."""
     def __init__(
@@ -37,109 +40,63 @@ class DynamicsDataModule(L.LightningDataModule):
         self.cache_path = Path(cache_dir) / f"{dynamics_path}.pth"
 
     def setup(self, stage=None):
-        print(f"Data module from {self.cache_path}")
-        if self.cache_path.exists():
-            self.full_ds = torch.load(self.cache_path)
-        else:
+        print(f"Data module from {self.cache_path}.mmap")
+        mmap_root = self.cache_path.with_suffix(".mmap")
+        index_file = mmap_root / "index.json"
+
+        if not index_file.exists():
+            mmap_root.mkdir(parents=True, exist_ok=True)
             dev = torch.device(self.device)
             self.dynamics.to(dev).eval()
 
             T, B, C, H, W = self.traj.shape
-            row_feats     = C * H * W
-            cols_x0y      = 1 + row_feats      # (t, x)   and   (dt,dx)   and    (1, x₁)
+            row_feats, cols_x0y = C*H*W, 1 + C*H*W
+            np_dtype    = np.float32
+            torch_dtype = torch.float32
+            chunk_T = self.chunk_steps
+            torch.manual_seed(0)
 
-            dtype      = torch.float32                         # keep legacy precision
-            chunk_T    = getattr(self, "chunk_steps", T)       # optional arg
-            tmp_path   = self.cache_path.with_suffix(".tmp")   # streamed file
-            if tmp_path.exists(): tmp_path.unlink()            # fresh run
+            index = []
+            for t0 in tqdm(range(0, T, chunk_T), desc="writing memmap chunks",
+                        total=math.ceil(T/chunk_T)):
+                t_slice = self.t_grid[t0:t0+chunk_T].to(dev)
+                x_slice = self.traj[t0:t0+chunk_T].to(dev)
+                x1      = self.traj[-1].cpu().view(B, -1)
 
-            torch.manual_seed(0)                               # reproducible tmp names
+                rows_here = len(t_slice) * B
+                mm = {k: open_memmap(mmap_root/f"{k}_{t0:07d}.npy",
+                                    mode='w+', dtype=np_dtype,
+                                    shape=(rows_here, cols_x0y if k!='dt' else 1))
+                    for k in ("x0","dx","y","dt")}
 
-            offset = 0
-            for t0 in tqdm(range(0, T, chunk_T),
-               desc="building data",
-               unit="frame",
-               total=math.ceil(T / chunk_T)):
-                
-                t_slice = self.t_grid[t0:t0+chunk_T].to(dev)          # (chunk_T,)
-                x_slice = self.traj[t0:t0+chunk_T].to(dev)            # (chunk_T,B,C,H,W)
-                x1      = self.traj[-1].cpu().view(B, -1)           # (B,row_feats)
-
-                # build four CPU tensors for this chunk
-                chunk_rows = len(t_slice) * B
-                x0_chunk   = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
-                dx_chunk   = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
-                y_chunk    = torch.empty((chunk_rows, cols_x0y), dtype=dtype)
-                dt_chunk   = torch.empty((chunk_rows, 1),        dtype=dtype)
-
-
-                # inner = 0
-                # for t_val, x in zip(t_slice, x_slice):
-                for inner, i in enumerate(
-                        tqdm(range(len(t_slice)),
-                            desc="   ↳ chunk",
-                            leave=False,
-                            unit="step")):
-                    t_val = t_slice[i]
-                    x_T   = x_slice[i]                     # (B, C, H, W)
-
+                cursor = 0
+                for t_val, x_T in zip(t_slice, x_slice):
                     for b0 in range(0, B, self.eval_chunk):
-                        b1 = min(b0 + self.eval_chunk, B)
-
-                        x  = x_T[b0:b1].to(dev)            # (b, C, H, W)
-                        t  = torch.full((b1-b0, 1), float(t_val), device=dev, dtype=dtype)
-
+                        b1  = min(b0+self.eval_chunk, B)
+                        x   = x_T[b0:b1].to(dev)
+                        t   = torch.full((b1-b0,1), float(t_val), device=dev, dtype=torch_dtype)
                         with torch.no_grad():
-                            dx = self.dynamics(t, x).view(b1-b0, -1).to(dtype)
-
-                        # write into pre-allocated CPU chunk
-                        j = inner * B + b0
-                        k = j + (b1 - b0)
-                        x0_chunk[j:k] = torch.cat((t.cpu(), x.view(b1-b0, -1).cpu()), 1)
-                        dx_chunk[j:k] = dx.cpu()
-                        y_chunk [j:k] = torch.cat((torch.ones(b1-b0,1), x1[b0:b1]), 1)
-                        dt_chunk[j:k] = (1.0 - t).cpu()
-
-                    inner += 1
-
-                # stream-append this chunk to disk
-                torch.save((x0_chunk, dx_chunk, y_chunk, dt_chunk),
-                        tmp_path, _use_new_zipfile_serialization=False)
-
-                offset += chunk_rows
-                del x_slice, t_slice, x0_chunk, dx_chunk, y_chunk, dt_chunk
+                            dx = self.dynamics(t, x).view(b1-b0, -1).to(torch_dtype)
+                        sl = slice(cursor, cursor+(b1-b0))
+                        mm["x0"][sl] = torch.cat((t.cpu(), x.view(b1-b0,-1).cpu()),1).numpy()
+                        mm["dx"][sl] = dx.cpu().numpy()
+                        mm["y"][sl]  = torch.cat((torch.ones(b1-b0,1), x1[b0:b1]),1).numpy()
+                        mm["dt"][sl] = (1.0 - t).cpu().numpy()
+                        cursor += (b1-b0)
+                for m in mm.values(): m.flush()
+                index.append({"t0": int(t0), "rows": rows_here})
                 torch.cuda.empty_cache()
 
-            parts = []
-            with open(tmp_path, "rb") as f:                  # sequential load
-                while True:
-                    try:
-                        parts.append(torch.load(f, map_location="cpu"))
-                    except EOFError:
-                        break                                # end of stream
+            json.dump(index, open(index_file, "w"))
 
-            matrix_x0 = torch.vstack([p[0] for p in parts])
-            matrix_dx = torch.vstack([p[1] for p in parts])
-            matrix_y  = torch.vstack([p[2] for p in parts])
-            matrix_dt = torch.vstack([p[3] for p in parts])
-            tmp_path.unlink()
+        self.full_ds = ChunkedMemmap(mmap_root)
 
-            self.full_ds = TensorDataset(matrix_x0, matrix_dx, matrix_y, matrix_dt)
-            self.cache_path.parent.mkdir(exist_ok=True, parents=True)
-            torch.save(self.full_ds, self.cache_path)
-
-        N = len(self.full_ds)
+        N       = len(self.full_ds)
         n_val   = int(self.val_frac * N)
-        n_train = N - n_val
-        train_set = set(range(n_train))
-        val_set   = set(range(n_train, N))
+        train_set, val_set = set(range(N-n_val)), set(range(N-n_val, N))
 
-        # reverse‑time ordering over [0..N-1]
-        full_order = TimeGroupedSampler(
-            time_steps=len(self.t_grid),
-            group_size=self.traj.size(1),
-        ).indices
-
+        full_order = TimeGroupedSampler(time_steps=len(self.t_grid),
+                                        group_size=self.traj.size(1)).indices
         self.train_ordered_indices = [i for i in full_order if i in train_set]
         self.val_ordered_indices   = [i for i in full_order if i in val_set]
 
@@ -151,7 +108,7 @@ class DynamicsDataModule(L.LightningDataModule):
             self.full_ds,
             batch_size=self.batch_size,
             sampler=self.train_sampler,
-            num_workers=4,
+            num_workers=16,
             pin_memory=True,
             persistent_workers=True,
             drop_last=True,
@@ -162,7 +119,7 @@ class DynamicsDataModule(L.LightningDataModule):
             self.full_ds,
             batch_size=self.batch_size,
             sampler=self.val_sampler,
-            num_workers=4,
+            num_workers=16,
             pin_memory=True,
             persistent_workers=False,
             drop_last=False,
@@ -173,3 +130,30 @@ class DynamicsDataModule(L.LightningDataModule):
 
     def predict_dataloader(self):
         pass
+
+class ChunkedMemmap(torch.utils.data.Dataset):
+    """one mem‑mapped chunk at a time and reuses it until we step into the next chunk, keeps RAM < batch*workers."""
+    def __init__(self, root: Path):
+        self.root  = root
+        self.meta  = json.load(open(root/"index.json"))
+        self.starts = np.cumsum([0] + [m["rows"] for m in self.meta[:-1]])
+        self._cached = (None, None)               # (chunk_id, maps)
+
+    def __len__(self):
+        return sum(m["rows"] for m in self.meta)
+
+    def _load_chunk(self, cid: int):
+        if self._cached[0] == cid:
+            return self._cached[1]
+        m = self.meta[cid]
+        mm = {k: np.load(self.root/f"{k}_{m['t0']:07d}.npy", mmap_mode="r")
+            for k in ("x0","dx","y","dt")}
+        self._cached = (cid, mm)
+        return mm
+
+    def __getitem__(self, idx: int):
+        cid = bisect.bisect_right(self.starts, idx) - 1
+        mm  = self._load_chunk(cid)
+        offset = idx - self.starts[cid]
+        return tuple(torch.as_tensor(mm[k][offset].copy())  # makes writable copy to suppress warnings
+             for k in ("x0", "dx", "y", "dt"))

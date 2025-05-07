@@ -9,7 +9,7 @@ traj:
 
 train:
   batch_size:          256
-  num_workers:         4
+  num_workers:         1
   lr:                  2e-4
   warmup:              50
   grad_clip:           1.0

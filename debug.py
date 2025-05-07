@@ -226,9 +226,19 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
 
         state_dim = C * H * W
         ae = Autoencoder_unet(
-            dim=(C, H, W),
-            num_channels=128,
-            num_res_blocks=2,
+            dim             =       [C, H, W],
+            # num_channels    =       128,
+            num_channels    =       256,
+            # num_res_blocks  =       2,
+            num_res_blocks  =       3,
+            # channel_mult    =       [1, 2, 2, 2],
+            channel_mult = [1,2,3,4],
+            # num_heads       =       4,
+            num_heads       =       8,
+            num_head_channels=      64,
+            # attention_resolutions=  "16",
+            attention_resolutions=  "16,8",
+            dropout         =       0.1,
         )
 
     elif dataset.lower() == "tfd":

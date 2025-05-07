@@ -1,5 +1,6 @@
 autoencoder:
-  bottleneck:             false
+  num_encoders:           1
+  bottleneck:             false # Setting both this and many encoders is not implemented yet
   dim:                    ${wrapper.dim}
   num_channels:           ${wrapper.num_channels}
   num_res_blocks:         ${wrapper.num_res_blocks}
@@ -26,10 +27,11 @@ train:
   # accelerator: gpu
   devices: [0]
   device: cuda
+  resume_ckpt: null
 
   # ─── Koopman DataModule settings ─────────────────────────────
   batch_size:     256
-  num_workers:    4
+  num_workers:    1
   val_frac:       0.2
   t_grid:         ${koopman.consume.T}
   chunk_steps:    ${cfm.traj.chunk_size}

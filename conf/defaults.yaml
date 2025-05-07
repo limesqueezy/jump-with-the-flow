@@ -17,7 +17,11 @@ defaults:
 trainer:
   accelerator: gpu     # Lightning arg
   devices: [0]         # single‐GPU default
-  strategy: auto       # DDP kicks in automatically if devices > 1
+  # strategy: auto       # DDP kicks in automatically if devices > 1
+
+  precision: 16                   # 16-bit mixed precision
+
+
 
 dataset_name: ${datadim.dataset_name}
 tag:          ${datadim.tag}
