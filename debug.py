@@ -279,6 +279,7 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
         state = torch.load(tfd_ckpt,
                            map_location=device,
                            weights_only=True)
+        print("Dynamics were successfully loaded!")
         wrapper_net.load_state_dict(state)
 
         state_dim = C * H * W
@@ -334,6 +335,36 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
     model.ckpt_path = latest
     print(f"> checkpoint loaded!")
     return model.to(device).eval()
+
+def strip_fid_from_checkpoint(in_ckpt: str, out_ckpt: str) -> str:
+    """
+    Remove all fid_train.* and fid_val.* keys from a Lightning checkpoint.
+    If in_ckpt == out_ckpt, writes to a new file with '_stripped_fid' before the extension.
+    Returns the path of the stripped checkpoint.
+    """
+    # if they passed the same path, create a new one
+    if os.path.abspath(in_ckpt) == os.path.abspath(out_ckpt):
+        base, ext = os.path.splitext(in_ckpt)
+        out_ckpt = f"{base}_stripped_fid{ext}"
+
+    # 1) Load the checkpoint (handles both Lightning‐style and raw state_dict)
+    ckpt = torch.load(in_ckpt, map_location="cpu")
+    sd = ckpt.get("state_dict", ckpt)
+
+    # 2) Remove all fid_train.* and fid_val.* entries
+    to_remove = [k for k in sd if k.startswith("fid_train.") or k.startswith("fid_val.")]
+    for k in to_remove:
+        sd.pop(k)
+
+    # 3) Save back
+    if "state_dict" in ckpt:
+        ckpt["state_dict"] = sd
+        torch.save(ckpt, out_ckpt)
+    else:
+        torch.save(sd, out_ckpt)
+
+    print(f"Removed {len(to_remove)} FID keys and wrote stripped checkpoint to\n    {out_ckpt}")
+    return out_ckpt
 
 def sample_and_save_grid(
     model,
@@ -584,6 +615,8 @@ if __name__ == "__main__":
                    help="total time horizon")
     p.add_argument("--device",   type=str, default="cuda")
     args = p.parse_args()
+
+    # stripped_ckpt = strip_fid_from_checkpoint(args.ckpt, args.ckpt)
 
     model = load_model(args.ckpt, dataset=args.dataset, device=args.device)
 

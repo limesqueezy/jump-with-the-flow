@@ -27,3 +27,5 @@ outputs/
 tb.out
 koopman_sweep.db
 logs
+
+mprofile*

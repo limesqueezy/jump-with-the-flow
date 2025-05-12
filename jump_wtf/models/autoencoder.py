@@ -87,24 +87,21 @@ class MultiUNetEncoder(nn.Module):
         K: int,
         dim: Tuple[int, int, int],
         bottleneck: bool = False,
-        device: str = "cuda",
         **unet_kwargs
     ):
         super().__init__()
         self.K = K
         self.base_dim = 1 + int(np.prod(dim))   # [t, x_flat]
 
-        # --- create K *independent* encoders ---
-        self.encoders = nn.ModuleList(
-            [
-                UNetModelWrapper_encoder(
-                    dim=dim,
-                    bottleneck=bottleneck,
-                    **unet_kwargs
-                ).to(device)
-                for _ in range(K)
-            ]
-        )
+        # --- create K independent encoders, all on CPU for now, helps with FSDP DDP etc
+        self.encoders = nn.ModuleList([
+            UNetModelWrapper_encoder(
+                dim=dim,
+                bottleneck=bottleneck,
+                **unet_kwargs
+            )
+            for _ in range(K)
+        ])
 
         # use the first to grab the per‑encoder extra size
         single_extra = self.encoders[0].output_dim - self.base_dim
@@ -128,8 +125,7 @@ class MultiUNetEncoder(nn.Module):
         # Feed each encoder, cut away the duplicated [t, x] part
         for enc in self.encoders:
             full = enc(torch.cat([t, flat], dim=1))
-            extras.append(full[:, self.base_dim:])   # keep only UNet‑specific part
-
+            extras.append(full[:, self.base_dim:])   # only UNet-specific part
         return torch.cat([t, flat, *extras], dim=1)
 
 class Decoder(nn.Module):
@@ -152,7 +148,7 @@ class Autoencoder_unet(nn.Module):
         dim: Tuple[int, int, int],
         num_encoders: int = 1,
         bottleneck: bool = False,
-        device: str = "cuda",
+        # device: str = "cuda",
         **unet_kwargs
     ):
         super().__init__()
@@ -162,13 +158,13 @@ class Autoencoder_unet(nn.Module):
                 dim        = dim,
                 bottleneck = bottleneck,
                 **unet_kwargs
-            ).to(device)
+            )#.to(device)
         else:
             self.encoder = MultiUNetEncoder(
                 K          = num_encoders,
                 dim        = dim,
                 bottleneck = bottleneck,
-                device     = device,
+                # device     = device,
                 **unet_kwargs
             )
 

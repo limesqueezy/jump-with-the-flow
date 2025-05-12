@@ -9,7 +9,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE
 from tqdm import trange
-from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
+from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
 from torchcfm.models.unet import UNetModel
 from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter, generate_trajectories
 from tqdm.auto import trange
@@ -17,15 +17,19 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks import RichProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 from lightning.pytorch import Trainer
-from lightning.pytorch.strategies import FSDPStrategy
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from functools import partial
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from lightning.pytorch.strategies import FSDPStrategy
+from torch.distributed.fsdp.fully_sharded_data_parallel import MixedPrecision
+import lightning
+
+from torchcfm.models.unet.unet import TimestepBlock, TimestepEmbedSequential, ResBlock, AttentionBlock
 
 from jump_wtf.utils.fid import FIDTrainCallback, FIDValCallback, compute_real_stats
 from jump_wtf.models.model import Model
 from jump_wtf.models.unet_wrapper import UNetWrapperKoopman
 from jump_wtf.data.datamodule import DynamicsDataModule
-from jump_wtf.models.autoencoder import Autoencoder_unet, UNetModelWrapper_encoder
+from jump_wtf.models.autoencoder import Autoencoder_unet, UNetModelWrapper_encoder, MultiUNetEncoder
 from jump_wtf.operators.generic import GenericOperator_state
 import torch.nn as nn
 
@@ -84,16 +88,18 @@ def run_cfm(cfg, writer):
 
         ckpt = torch.load(weights_path, map_location=device, weights_only=True)
 
-        state = ckpt["ema_model"] # TODO: commenting since I didn't save the custom CFM correctly
-        net.load_state_dict(state)
-        wrapper_net.load_state_dict(state)
-
-        # net.load_state_dict(ckpt)
-        # wrapper_net.load_state_dict(ckpt)
+        if cfg.tag == "rgb_full":
+            state = ckpt["ema_model"] # TODO: commenting since I didn't save the custom CFM correctly
+            net.load_state_dict(state)
+            wrapper_net.load_state_dict(state)
+        else:
+            net.load_state_dict(ckpt)
+            wrapper_net.load_state_dict(ckpt)
         
         log_generated_samples(writer, net, cfg, step=0, tag="cfm/loaded_samples")
 
     # Check if we have the final (t, x, v, x₁, Δt) pth
+    # TODO: Here we check for pth shit not mmap...
     if dyn_dataset_path.exists():
         writer.add_text("cfm/dyn_dataset",f"\n~FAST~\nLoading cached DynamicsDataModule from `{dyn_dataset_path}`")
         traj = torch.load(traj_path, map_location="cpu", weights_only=True)
@@ -107,9 +113,8 @@ def run_cfm(cfg, writer):
             t_grid=cfg.koopman.train.t_grid,
             val_frac=cfg.koopman.train.val_frac,
             chunk_steps=cfg.koopman.train.chunk_steps,
-            device=cfg.koopman.train.device,
         )
-        dm.setup()
+        dm.prepare_data()
         # We're stalling here...
         writer.add_text("cfm/dyn_dataset",f"Returning from `run_cfm`")
         return dm
@@ -120,7 +125,8 @@ def run_cfm(cfg, writer):
         writer.add_text("cfm/weights",f"Training UNet on {cfg.dataset_name}_{cfg.tag} and will save to `{weights_path}`")
         net     = hydra.utils.instantiate(cfg.model).to(device)
         ema_net = copy.deepcopy(net).to(device)
-        matcher_obj = ExactOptimalTransportConditionalFlowMatcher(sigma=cfg.cfm.matcher.sigma)
+        # matcher_obj = ExactOptimalTransportConditionalFlowMatcher(sigma=cfg.cfm.matcher.sigma)
+        matcher_obj = ConditionalFlowMatcher(sigma=cfg.cfm.matcher.sigma)
         opt   = torch.optim.Adam(net.parameters(), lr=cfg.cfm.train.lr)
         sched = torch.optim.lr_scheduler.LambdaLR(opt,
                     lambda step: min(step, cfg.cfm.train.warmup) / cfg.cfm.train.warmup)
@@ -156,6 +162,7 @@ def run_cfm(cfg, writer):
         torch.save(net.state_dict(), weights_path)
         writer.add_text("cfm/weights",f"Saving final weights to `{weights_path}`")
         log_generated_samples(writer, net, cfg, step=cfg.cfm.train.total_steps, tag="cfm/final_samples")
+        breakpoint()
         wrapper_net.load_state_dict(net.state_dict())
     # else:
     # # That's a duplicate TODO: delete it
@@ -182,10 +189,9 @@ def run_cfm(cfg, writer):
         batch_size=cfg.cfm.train.batch_size,
         t_grid=cfg.cfm.traj.traj_steps,
         chunk_steps=cfg.cfm.traj.chunk_size,
-        shard_size_mib=cfg.koopman.train.shard_size_mib,
         val_frac=cfg.cfm.train.val_frac,
     )
-    dm.setup()
+    dm.prepare_data()
     return dm
 
 def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
@@ -211,7 +217,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     stats_path = Path("assets/fid_stats") / cfg.dataset_name
     stats_path.mkdir(parents=True, exist_ok=True)
     stats_file = stats_path / f"fid_stats_{cfg.dataset_name}.pt"
-    stats_file = compute_real_stats(hydra.utils.instantiate(cfg.dataset), stats_file)
+    stats_file = compute_real_stats(hydra.utils.instantiate(cfg.dataset), stats_file, device="cpu") # This might not be a good way to do this... probably move it inside a Trainer context
     writer.add_text("koopman/fid_stats_path", str(stats_file))
 
     # AE and Operator
@@ -220,7 +226,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     ae_cfg = cfg.koopman.autoencoder
     autoencoder = Autoencoder_unet(
         **ae_cfg,
-        device=cfg.koopman.train.device
+        # device=cfg.koopman.train.device
     )
 
     state_dim   = autoencoder.encoder.output_dim - 1   # strip the t column
@@ -231,7 +237,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     koopman_op = GenericOperator_state(
         operator_dim,
         cfg.koopman.operator.init_std
-    ).to(cfg.koopman.train.device)
+    )
 
     loss_fn = nn.MSELoss()
 
@@ -263,58 +269,173 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
         fid_real_stats_path = stats_file,
     )
 
-    # run_id = f"{cfg.dataset_name}_{cfg.tag}-koopman-{datetime.datetime.now():%Y%m%d-%H%M%S}"
-    # ckpt_root  = Path("checkpoints") / run_id
-    # ckpt_root.mkdir(parents=True, exist_ok=True)
+    # checkpoint_cb  = ModelCheckpoint(
+    #     dirpath=ckpt_root, filename="epoch-{epoch}",
+    #     save_top_k=-1, every_n_epochs=10)
 
-    checkpoint_cb  = ModelCheckpoint(
-        dirpath=ckpt_root, filename="epoch-{epoch}",
-        save_top_k=-1, every_n_epochs=10)
+    # ckpt_cb        = ModelCheckpoint(
+    #     dirpath=ckpt_root, filename="best-step{step:06d}-{train_loss_step:.4f}",
+    #     monitor="total_loss", mode="min", save_top_k=1,
+    #     every_n_train_steps=100, save_on_train_epoch_end=False, save_last=True)
 
-    ckpt_cb        = ModelCheckpoint(
-        dirpath=ckpt_root, filename="best-step{step:06d}-{train_loss_step:.4f}",
-        monitor="total_loss", mode="min", save_top_k=1,
-        every_n_train_steps=100, save_on_train_epoch_end=False, save_last=True)
+    # ckpt_fid_train = ModelCheckpoint(
+    #     dirpath=ckpt_root, monitor="fid_train", mode="min",
+    #     filename="best-fid-train-{step:.0f}-{fid_train:.3f}",
+    #     save_top_k=1, every_n_train_steps=5000, save_on_train_epoch_end=False)
 
-    ckpt_fid_train = ModelCheckpoint(
-        dirpath=ckpt_root, monitor="fid_train", mode="min",
+    # ckpt_fid_val   = ModelCheckpoint(
+    #     dirpath=ckpt_root, monitor="fid_val", mode="min",
+    #     filename="best-fid-val-{epoch:03d}-{fid_val:.3f}", save_top_k=1)
+
+    # 1) Delayed loss checkpoint + last.ckpt
+    class DelayedModelCheckpoint(ModelCheckpoint):
+        def __init__(self, start_epoch: int = 4, **kwargs):
+            self.start_epoch = start_epoch
+            super().__init__(**kwargs)
+
+        def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
+            if trainer.current_epoch < self.start_epoch:
+                return
+            super().on_train_batch_end(trainer, pl_module, *args, **kwargs)
+
+        def on_train_epoch_end(self, trainer, pl_module):
+            if trainer.current_epoch < self.start_epoch or not self.save_last:
+                return
+            self._save_last_checkpoint(trainer, trainer.callback_metrics)
+
+    checkpoint_cb = DelayedModelCheckpoint(
+        start_epoch=cfg.koopman.train.after_epoch_loss,
+        monitor="total_loss",
+        dirpath=ckpt_root,
+        filename="best-{step:06d}-{total_loss:.4f}",
+        save_top_k=1,
+        mode="min",
+        every_n_train_steps=cfg.koopman.train.every_n_loss,
+        save_on_train_epoch_end=False,
+        save_last=True,
+    )
+
+    # subclass the one you already have
+    class GatedFIDTrain(FIDTrainCallback):
+        def __init__(
+            self,
+            every_n_steps: int = 500,
+            fake_batches: int = 8,
+            bs: int = 256,
+            rollout_steps: int = 1,
+            start_epoch: int = 0,
+        ):
+            # pass along all args except start_epoch
+            super().__init__(
+                every_n_steps=every_n_steps,
+                fake_batches=fake_batches,
+                bs=bs,
+                rollout_steps=rollout_steps,
+            )
+            self.start_epoch = start_epoch
+
+        def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
+            # only begin computing/logging FID at your start_epoch
+            if trainer.current_epoch < self.start_epoch:
+                return
+            super().on_train_batch_end(trainer, pl_module, *args, **kwargs)
+
+    fid_log_cb = GatedFIDTrain(
+        every_n_steps=cfg.koopman.train.every_n_fid,
+        start_epoch=cfg.koopman.train.after_epoch_fid,
+        fake_batches=8,
+        bs=256,
+        rollout_steps=1,
+    )
+
+    # 3) Delayed FID-checkpoint (best only)
+    fid_save_cb = DelayedModelCheckpoint(
+        start_epoch=cfg.koopman.train.after_epoch_fid,
+        monitor="fid_train",
+        dirpath=ckpt_root,
         filename="best-fid-train-{step:.0f}-{fid_train:.3f}",
-        save_top_k=1, every_n_train_steps=20, save_on_train_epoch_end=False)
+        save_top_k=1,
+        mode="min",
+        every_n_train_steps=cfg.koopman.train.every_n_fid,
+        save_on_train_epoch_end=False,
+        save_last=False,
+    )
 
-    ckpt_fid_val   = ModelCheckpoint(
-        dirpath=ckpt_root, monitor="fid_val", mode="min",
-        filename="best-fid-val-{epoch:03d}-{fid_val:.3f}", save_top_k=1)
-    
-    # wrap = partial(transformer_auto_wrap_policy,
-    #            transformer_layer_cls={UNetModelWrapper_encoder})  # <- here
+    # ignored = [
+    #     m for m in model.modules()
+    #     if isinstance(m, (TimestepBlock, TimestepEmbedSequential))
+    # ]
+
+    # mp_policy = MixedPrecision(
+    #     param_dtype=torch.float16,
+    #     reduce_dtype=torch.float16,
+    #     buffer_dtype=torch.float16,
+    # )
+
+    # Trying big chunks
+    wrap_policy = partial(size_based_auto_wrap_policy, min_num_params=2_000_000)
 
     # fsdp = FSDPStrategy(
-    #         auto_wrap_policy=wrap,
-    #         activation_checkpointing=[UNetModelWrapper_encoder],  # optional
-    #         cpu_offload=False,
+    #     auto_wrap_policy             = wrap_policy,
+    #     mixed_precision              = mp_policy,
+    #     activation_checkpointing_policy = {ResBlock, AttentionBlock},
+    #     limit_all_gathers            = True,
+    #     cpu_offload                  = False,
+    #     ignored_modules              = ignored,
+    # )
+
+    fsdp = FSDPStrategy(
+        auto_wrap_policy=wrap_policy,         # wrap whole model
+        mixed_precision=None,          # fp32 everywhere
+        activation_checkpointing_policy = None,
+        limit_all_gathers         = True,
+        backward_prefetch         = "BACKWARD_POST",
+        sync_module_states        = True,
+    )
+
+    # fsdp = FSDPStrategy(
+    #     auto_wrap_policy=wrap_policy,         # wrap whole model
+    #     mixed_precision=None,          # fp32 everywhere
+    #     activation_checkpointing_policy = None,
+    #     limit_all_gathers         = True,
+    #     backward_prefetch         = "BACKWARD_POST",
+    #     sync_module_states        = True,
     # )
 
     trainer = Trainer(
         callbacks=[
+            # PrintShards(), #FSDP
             RichProgressBar(refresh_rate=1),
             checkpoint_cb,
-            ckpt_cb,
-            FIDTrainCallback(every_n_steps=20),
-            ckpt_fid_train,
-            FIDValCallback(),
-            ckpt_fid_val,
+            fid_log_cb,
+            fid_save_cb,
+            # FIDValCallback(),
             *extra_cbs,
         ],
         logger=tb_logger,
-        accelerator=cfg.trainer.accelerator,   # e.g. "gpu"
+        accelerator=cfg.trainer.accelerator,
         devices=cfg.trainer.devices,           # e.g. [0] or [0,1]
-        # strategy=cfg.trainer.strategy,         # e.g. "auto" or "ddp"
-        # precision=cfg.trainer.precision,           # 16-bit
-        # strategy=fsdp,
+        precision=cfg.trainer.precision, #FSDP 32-true
+        # strategy=fsdp, #FSDP
         default_root_dir=run_dir,
         max_epochs=cfg.koopman.train.max_epochs,
         log_every_n_steps=cfg.koopman.train.log_every_n_steps,
     )
+
+    print("Actual strategy:", trainer.strategy.__class__)
+
+
+
+    print("\n=== FSDPStrategy summary ===")
+    pprint(summarize(trainer.strategy))
+
+    print("\n=== Accelerator summary ===")
+    pprint(summarize(trainer.accelerator))
+
+    total = count_params(model)
+    print(f"=== Total parameters: {total/1e6:.1f} M  "
+        f"({total*4/1024/1024:.0f} MB in FP32)")
+
 
     ckpt_candidate = cfg.koopman.train.resume_ckpt
     if ckpt_candidate:
@@ -322,8 +443,59 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     else:
         ckpt_path = None
 
+    # print(torch.cuda.memory_summary())
+
     trainer.fit(model, dm, ckpt_path=ckpt_path)
     return trainer
+
+import inspect
+from pprint import pprint
+
+def summarize(obj):
+    summary = {}
+    for name, val in inspect.getmembers(obj):
+        # skip private and magic
+        if name.startswith("_") or name in ("__class__", "__module__"):
+            continue
+        # skip methods
+        if inspect.ismethod(val) or inspect.isfunction(val):
+            continue
+        # safely stringify
+        try:
+            summary[name] = repr(val)
+        except Exception:
+            summary[name] = f"<unrepr-able {type(val)}>"
+    return summary
+
+def count_params(module):
+    return sum(p.numel() for p in module.parameters())
+
+
+from torch.distributed.fsdp.api import FullStateDictConfig, StateDictType
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from lightning.pytorch.callbacks import Callback
+import os, torch, torch.distributed as dist
+
+class PrintShards(Callback):
+    THRESHOLD = 1_000_000
+
+    def on_fit_start(self, trainer, pl_module):
+        rank      = trainer.global_rank
+        world_sz  = trainer.strategy.world_size
+        total_p   = sum(p.numel() for p in pl_module.parameters())
+        shard_p   = sum(p.numel() for p in pl_module.parameters()
+                        if p.numel() >= self.THRESHOLD)
+        print(f"\n[RANK {rank}/{world_sz}] visible params: "
+              f"{shard_p/1e6:.1f} M of {total_p/1e6:.1f} M total")
+
+        for n, p in pl_module.named_parameters():
+            if p.numel() >= self.THRESHOLD:
+                print(f"  {n:<55s} {p.numel()/1e6:7.1f} M  {p.device}")
+
+        # barrier so prints don’t interleave
+        if dist.is_initialized():
+            dist.barrier()
+
 
 if __name__ == "__main__":
     main()

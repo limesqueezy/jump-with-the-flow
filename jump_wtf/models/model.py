@@ -54,33 +54,46 @@ class Model(L.LightningModule):
 
         self.fid_interval = fid_interval
 
-        self.fid_train = make_fid_metric(fid_real_stats_path)
-        self.fid_val   = make_fid_metric(fid_real_stats_path)
+        self.fid_real_stats_path = fid_real_stats_path
+
+        self.fid_train = make_fid_metric(fid_real_stats_path, device="cpu").eval()
+        self.fid_val   = make_fid_metric(fid_real_stats_path, device="cpu").eval()
+
+    # def setup(self, stage: str):
+    #     dev = self.device
+
+    #     self.fid_train = make_fid_metric(self.fid_real_stats_path, device=dev)
+    #     self.fid_val   = make_fid_metric(self.fid_real_stats_path, device=dev)
 
     def training_step(self, batch, batch_idx):
+
+        if self.global_step == 0:
+            print(torch.cuda.memory_summary())
+            # breakpoint()
+
         
         tensorboard = self.logger.experiment
         optimiser_autoencoder, optimiser_lie = self.optimizers()
         autoencoder_scheduler, lie_scheduler = self.lr_schedulers()
         tensor2d_batch_x, tensor2d_batch_x_next, targets, delta_t = batch
 
-        if (self.global_step == 0) or (self.global_step%self.plot_every==0):
+        # if (self.global_step == 0) or (self.global_step%self.plot_every==0):
             
-            if self.multistep == True:
-                self.compute_multistep = True
+        #     if self.multistep == True:
+        #         self.compute_multistep = True
             
-            else: 
-                self.compute_multistep = False
+        #     else: 
+        #         self.compute_multistep = False
             
-            if self.time_bool:
-                self.time = np.linspace(0,1,self.num_iter)[np.random.randint(0,self.num_iter)]
-            #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, self.time, self.time_bool, cfm_model=self.cfm_model)
-            #else: 
-            #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, time=None, time_dep=self.time_bool)
-            with torch.no_grad():
-                sample = sample_efficient(self, t_max=1, n_iter=100)
-            sample = sample.clamp(-1, 1)
-            tensorboard.add_image("sample", sample, self.global_step, dataformats="NCHW")
+        #     if self.time_bool:
+        #         self.time = np.linspace(0,1,self.num_iter)[np.random.randint(0,self.num_iter)]
+        #     #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, self.time, self.time_bool, cfm_model=self.cfm_model)
+        #     #else: 
+        #     #    im, min_error, max_error, total_log_error = plot_sim(self, self.dynamics, time=None, time_dep=self.time_bool)
+        #     with torch.no_grad():
+        #         sample = sample_efficient(self, t_max=1, n_iter=100)
+        #     sample = sample.clamp(-1, 1)
+        #     tensorboard.add_image("sample", sample, self.global_step, dataformats="NCHW")
         
             #Log relevant info
             #self.log("total_log_error", total_log_error, prog_bar=True)
@@ -177,9 +190,11 @@ class Model(L.LightningModule):
         self.log("energy_loss", energy_loss, prog_bar=True)
         self.log("sample_loss", sample_loss, prog_bar=True)
         self.log("sample_loss_phase", sample_loss_phase, prog_bar=True)
-        self.log("total_loss", tensor_loss, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        # self.log("total_loss", tensor_loss, on_step=True, on_epoch=False, prog_bar=True, logger=True)
         
         self.manual_backward(tensor_loss)
+        # self.trainer.strategy.backward(self, tensor_loss)
+
         optimiser_autoencoder.step()
         optimiser_lie.step()
         
@@ -191,6 +206,8 @@ class Model(L.LightningModule):
         # per‑step: for checkpointing
         self.log("train_loss_step", tensor_loss,
                 on_step=True,  on_epoch=False, prog_bar=False)
+        
+        self._last_total_loss = tensor_loss.detach()
 
         # epoch‑average: for TensorBoard
         self.log("train_loss", tensor_loss,
@@ -198,6 +215,18 @@ class Model(L.LightningModule):
         
         self.count += 1
         return tensor_loss
+        
+    def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
+        if hasattr(self, "_last_total_loss"):
+            self.log(
+                "total_loss",
+                self._last_total_loss,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True,
+                logger=True,
+                sync_dist=True,
+            )
 
     def configure_optimizers(self):
         learning_rate_autoencoder = self.autoencoder_lr

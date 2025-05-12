@@ -8,16 +8,53 @@ from lightning.pytorch.callbacks import Callback
 
 class FIDTrainCallback(Callback):
     def __init__(self, every_n_steps=500,
-                 fake_batches=8, bs=256, rollout_steps=1):
+                 fake_batches=8, bs=256, rollout_steps=1, start_epoch=0):
         self.every, self.fake_batches, self.bs = every_n_steps, fake_batches, bs
         self.rollout_steps = rollout_steps
         self._step_counter = 0
+        self.start_epoch = start_epoch
 
-    # signature with *args **kwargs swallows extra params can get richer signatures outputs, batch, batch_idx blabla
-    def on_train_batch_end(self, trainer, pl_module, *args, **kwargs): # design choice to run the after optimizer step hook there's on_train_batch_start too
+    # def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
+    #     self._step_counter += 1
+    #     if self._step_counter % self.every != 0:
+    #         return
+
+    #     fid = pl_module.fid_train
+    #     # only the global-zero process generates samples & computes FID
+    #     if trainer.is_global_zero:
+    #         fid.reset()
+    #         pl_module.eval()
+    #         with torch.no_grad():
+    #             for _ in range(self.fake_batches):
+    #                 fake = sample_efficient(
+    #                     pl_module, n_iter=self.rollout_steps, n_samples=self.bs
+    #                 )
+    #                 fid.update(to_fid(fake), real=False)
+    #         score = fid.compute()
+    #     else:
+    #         # dummy so every rank calls log()
+    #         score = torch.tensor(0.0, device=pl_module.device)
+
+    #     # broadcast the true FID (from rank 0) to all procs via max‐reduction
+    #     pl_module.log(
+    #         "fid_train",
+    #         score,
+    #         on_step=True,
+    #         on_epoch=False,
+    #         prog_bar=True,
+    #         sync_dist=True,
+    #         sync_dist_op="max",
+    #     )
+    #     pl_module.train()
+
+
+    def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
+
+        if trainer.current_epoch < self.start_epoch:
+            return
         self._step_counter += 1
-        if self._step_counter % self.every:
-            return                                # not time yet
+        if self._step_counter % self.every != 0:
+            return
 
         fid = pl_module.fid_train
         fid.reset()                               # clear fake stats only
@@ -90,7 +127,7 @@ def compute_real_stats(
     num_workers=4,
 ):
     """
-    One‑shot over your real data, dump full FID.state_dict()
+    One‑shot over real data, dump full FID.state_dict()
     Skips work if `out` already exists.
 
     Args:
@@ -122,7 +159,7 @@ def compute_real_stats(
     torch.save(state, p)
     return str(p)
 
-def make_fid_metric(state_path: str, device: str = "cuda"):
+def make_fid_metric(state_path: str, device):
     """
     Returns a FrechetInceptionDistance metric whose real‐image statistics
     are loaded from a pre‐computed state dict. Fake‐image accumulators

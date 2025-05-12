@@ -15,13 +15,11 @@ defaults:
   - koopman: koopman
 
 trainer:
-  accelerator: gpu     # Lightning arg
-  devices: [0]         # single‐GPU default
-  # strategy: auto       # DDP kicks in automatically if devices > 1
+  accelerator: gpu
+  devices: [0]            # single‐GPU default
+  # strategy: auto        # DDP kicks in automatically if devices > 1
 
-  precision: 16                   # 16-bit mixed precision
-
-
+  precision: "32-true"    # 16-mixed, default: 32-true
 
 dataset_name: ${datadim.dataset_name}
 tag:          ${datadim.tag}

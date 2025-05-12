@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
-# OLD ONE TODO: Shouldn't we do torch no grad when we set init weights?
 class GenericOperator_state(nn.Module):
     """ 
     Generic operator with no particular parametrization

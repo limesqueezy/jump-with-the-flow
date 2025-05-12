@@ -37,6 +37,13 @@ train:
   chunk_steps:    ${cfm.traj.chunk_size}
   # ───────────────────────────────────────────────────────────────
 
+  # ─── Checkpoint scheduling ─────────────────────────────
+  after_epoch_fid:  6
+  after_epoch_loss: 4
+  every_n_fid:      20
+  every_n_loss:     20
+  # ───────────────────────────────────────────────────────
+
   max_epochs:     3
 
   autoencoder_lr: 0.001
