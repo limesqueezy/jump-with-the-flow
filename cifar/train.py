@@ -288,7 +288,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     ckpt_fid_train = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_train", mode="min",
         filename="best-fid-train-{step:.0f}-{fid_train:.3f}",
-        save_top_k=1, every_n_train_steps=20, save_on_train_epoch_end=False)
+        save_top_k=1, every_n_train_steps=200, save_on_train_epoch_end=False)
 
     ckpt_fid_val   = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_val", mode="min",
@@ -297,12 +297,12 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     trainer = Trainer(
         callbacks=[
             RichProgressBar(),
-            checkpoint_cb,
-            ckpt_cb,
-            FIDTrainCallback(every_n_steps=20),
+            # checkpoint_cb,
+            # ckpt_cb,
+            FIDTrainCallback(every_n_steps=200),
             ckpt_fid_train,
-            FIDValCallback(),
-            ckpt_fid_val,
+            # FIDValCallback(),
+            # ckpt_fid_val,
             *extra_cbs,
         ],
         logger=tb_logger,

@@ -1,4 +1,8 @@
 import torch
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
 
 def get_koop_continuous_batch(model, output_dim, t):
     """
@@ -28,3 +32,12 @@ def get_koop_continuous(model, output_dim, t):
     lie_module = model.koopman(identity)
     evolution_op = torch.matrix_exp(t * lie_module)
     return evolution_op
+
+def plot_operator(K: np.ndarray) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(8,6), dpi=150)
+    sns.heatmap(K, ax=ax, cmap="viridis", cbar_kws={"label":"Weight"})
+    ax.set_title("Koopman Operator Heatmap")
+    ax.set_xlabel("Input Mode")
+    ax.set_ylabel("Output Mode")
+    plt.tight_layout()
+    return fig

@@ -1,3 +1,4 @@
+import time
 import torch, torchvision
 from torch.utils.data import DataLoader
 from torchmetrics.image.fid import FrechetInceptionDistance
@@ -9,37 +10,92 @@ from lightning.pytorch.callbacks import Callback
 class FIDTrainCallback(Callback):
     def __init__(self, every_n_steps=500,
                  fake_batches=8, bs=256, rollout_steps=1):
-        self.every, self.fake_batches, self.bs = every_n_steps, fake_batches, bs
+        self.every = every_n_steps
+        self.fake_batches = fake_batches
+        self.bs = bs
         self.rollout_steps = rollout_steps
         self._step_counter = 0
 
-    # signature with *args **kwargs swallows extra params can get richer signatures outputs, batch, batch_idx blabla
-    def on_train_batch_end(self, trainer, pl_module, *args, **kwargs): # design choice to run the after optimizer step hook there's on_train_batch_start too
+    def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
         self._step_counter += 1
-        if self._step_counter % self.every:
-            return                                # not time yet
+        # only profile every N steps
+        if self._step_counter % self.every != 0:
+            return
 
-        fid = pl_module.fid_train
-        fid.reset()                               # clear fake stats only
+        # start total timer
+        t0 = time.perf_counter()
 
+        pl_module.fid_train.reset()
+        # sampling + update
+        t_sample0 = time.perf_counter()
         pl_module.eval()
         with torch.no_grad():
             for _ in range(self.fake_batches):
                 fake = sample_efficient(
                     pl_module, n_iter=self.rollout_steps, n_samples=self.bs
                 )
-                fid.update(to_fid(fake), real=False)
+                pl_module.fid_train.update(to_fid(fake), real=False)
         pl_module.train()
+        t_sample = time.perf_counter() - t_sample0
 
-        score = fid.compute()
-        pl_module.log(
-            "fid_train",
-            score,
-            on_step=True,       # step‐wise metric, requried!
+        # compute
+        t_compute0 = time.perf_counter()
+        score = pl_module.fid_train.compute()
+        t_compute = time.perf_counter() - t_compute0
+
+        # log both the FID and all timers
+        t_log0 = time.perf_counter()
+        pl_module.log_dict(
+            {
+                "fid_train": score,
+                "timings/sampling": t_sample,
+                "timings/compute": t_compute,
+                "timings/total_callback": time.perf_counter() - t0,
+            },
+            on_step=True,
             on_epoch=False,
             prog_bar=True,
             sync_dist=True
         )
+        
+        print(f"[FID cb] sample={t_sample:.3f}s "
+              f"compute={t_compute:.3f}s "
+              f"total={(time.perf_counter()-t0):.3f}s")
+
+# class FIDTrainCallback(Callback):
+#     def __init__(self, every_n_steps=500,
+#                  fake_batches=8, bs=256, rollout_steps=1):
+#         self.every, self.fake_batches, self.bs = every_n_steps, fake_batches, bs
+#         self.rollout_steps = rollout_steps
+#         self._step_counter = 0
+
+#     # signature with *args **kwargs swallows extra params can get richer signatures outputs, batch, batch_idx blabla
+#     def on_train_batch_end(self, trainer, pl_module, *args, **kwargs): # design choice to run the after optimizer step hook there's on_train_batch_start too
+#         self._step_counter += 1
+#         if self._step_counter % self.every:
+#             return                                # not time yet
+
+#         fid = pl_module.fid_train
+#         fid.reset()                               # clear fake stats only
+
+#         pl_module.eval()
+#         with torch.no_grad():
+#             for _ in range(self.fake_batches):
+#                 fake = sample_efficient(
+#                     pl_module, n_iter=self.rollout_steps, n_samples=self.bs
+#                 )
+#                 fid.update(to_fid(fake), real=False)
+#         pl_module.train()
+
+#         score = fid.compute()
+#         pl_module.log(
+#             "fid_train",
+#             score,
+#             on_step=True,       # step‐wise metric, requried!
+#             on_epoch=False,
+#             prog_bar=True,
+#             sync_dist=True
+#         )
 
 class FIDValCallback(Callback):
     def __init__(self, fake_batches=12, bs=256, rollout_steps=100):

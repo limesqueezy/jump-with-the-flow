@@ -2,10 +2,12 @@ import torch
 import lightning as L
 import numpy as np
 import torch.autograd as autograd
+from matplotlib import pyplot as plt
 from jump_wtf.losses.koopman_loss import loss
 from jump_wtf.utils.sampling import sample_efficient
 from torchmetrics.image.fid import FrechetInceptionDistance
 from jump_wtf.utils.fid import make_fid_metric, compute_real_stats
+from jump_wtf.operators.utils import plot_operator
 import debugpy
 
 class Model(L.LightningModule):
@@ -76,6 +78,14 @@ class Model(L.LightningModule):
                 sample = sample_efficient(self, t_max=1, n_iter=100)
             sample = sample.clamp(-1, 1)
             tensorboard.add_image("sample", sample, self.global_step, dataformats="NCHW")
+
+            K = self.koopman.operator.detach().cpu().numpy()
+            fig = plot_operator(K)
+
+            self.logger.experiment.add_figure(
+                "koopman/operator", fig, self.global_step
+            )
+            plt.close(fig)
         
             #Log relevant info
             #self.log("total_log_error", total_log_error, prog_bar=True)
