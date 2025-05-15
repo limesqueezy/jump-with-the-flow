@@ -1,0 +1,7 @@
+defaults:
+  - /dataset: fashion_mnist
+
+dim: [1, 28, 28]
+
+dataset_name: fashion_mnist
+tag:          full

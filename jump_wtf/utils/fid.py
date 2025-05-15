@@ -161,6 +161,9 @@ def compute_real_stats(
         return str(p)
 
     fid = FrechetInceptionDistance(2048, normalize=True).to(device)
+    
+    fid.set_dtype(torch.float32)
+
 
     # if they passed a Dataset, wrap it
     if not isinstance(data, DataLoader):

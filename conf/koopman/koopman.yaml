@@ -13,6 +13,7 @@ autoencoder:
   use_checkpoint:         ${wrapper.use_checkpoint}
   use_fp16:               ${wrapper.use_fp16}
   use_new_attention_order: ${wrapper.use_new_attention_order}
+  resblock_updown:        ${wrapper.resblock_updown}
 
 operator:
   operator_dim:   null    # will be set in code:  raw_state_dim + latent_dim
@@ -20,7 +21,7 @@ operator:
 
 consume:          # how many snapshots to feed the AE
   T: 100          # same as cfm.traj.traj_steps
-  B: 2000         # same as cfm.traj.n_traj
+  B: 20_000         # same as cfm.traj.n_traj
 
 train:
   # accelerator: gpu

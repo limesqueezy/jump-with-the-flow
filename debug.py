@@ -192,7 +192,7 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
             num_res_blocks=1
         ).to("cpu")
 
-        ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20.pt", map_location=device, weights_only=True)
+        ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20000.pt", map_location=device, weights_only=True)
         wrapper_net.load_state_dict(ckpt)
 
         state_dim = C * H * W
@@ -203,7 +203,7 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
         )
 
     elif dataset.lower() == "cifar":
-        C, H, W = 1, 32, 32 # CHANGE FOR COLOR CIFAR
+        C, H, W = 3, 32, 32 # CHANGE FOR COLOR CIFAR
         wrapper_net = UNetWrapperKoopman(
             dim             =       [C, H, W],
             num_channels    =       128,
@@ -214,56 +214,106 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
             attention_resolutions=  "16",
             dropout         =       0.1,
         ).to(device)
-        # pretrained_full_cifar = "assets/unet_dynamics/cifar10_otcfm_step-400000.pt"
-        # ckpt = torch.load(pretrained_full_cifar, map_location=device, weights_only=True)
-        # state = ckpt["ema_model"]
-        duo_gray_cifar = "assets/unet_dynamics/cifar10_double_gray_otcfm_step-20000.pt"
-        state = torch.load(duo_gray_cifar, map_location=device, weights_only=True)
+        pretrained_full_cifar = "assets/unet_dynamics/cifar10_rgb_full_otcfm_step-400000.pt"
+        ckpt = torch.load(pretrained_full_cifar, map_location=device, weights_only=True)
+        state = ckpt["ema_model"]
+
+        # duo_gray_cifar = "assets/unet_dynamics/cifar10_double_gray_otcfm_step-20000.pt"
+        # state = torch.load(duo_gray_cifar, map_location=device, weights_only=True)
+
+
         wrapper_net.load_state_dict(state)
 
         state_dim = C * H * W
         ae = Autoencoder_unet(
-            dim=(C, H, W),
-            num_channels=32,
-            num_res_blocks=1,
+            dim             =       [C, H, W],
+            # num_channels    =       128,
+            num_channels    =       256,
+            # num_res_blocks  =       2,
+            num_res_blocks  =       3,
+            # channel_mult    =       [1, 2, 2, 2],
+            channel_mult = [1,2,3,4],
+            # num_heads       =       4,
+            num_heads       =       8,
+            num_head_channels=      64,
+            # attention_resolutions=  "16",
+            attention_resolutions=  "16,8",
+            dropout         =       0.1,
         )
 
     elif dataset.lower() == "tfd":
         # Toronto Face Dataset (1×48×48)
-        C, H, W = 1, 48, 48
+        # C, H, W = 1, 48, 48
+        C, H, W = 1, 28, 28
+
+        # wrapper_net = UNetWrapperKoopman(
+        #     dim                 = (C, H, W),
+        #     num_channels        = 64,
+        #     num_res_blocks      = 2,
+        #     channel_mult        = [1, 1, 2, 3, 4],
+        #     num_heads           = 4,
+        #     num_head_channels   = 64,
+        #     attention_resolutions= "16",
+        #     dropout             = 0.1,
+        # ).to(device)
+
         wrapper_net = UNetWrapperKoopman(
-            dim                 = (C, H, W),
-            num_channels        = 64,
-            num_res_blocks      = 2,
-            channel_mult        = [1, 1, 2, 3, 4],
-            num_heads           = 4,
-            num_head_channels   = 64,
-            attention_resolutions= "16",
-            dropout             = 0.1,
+            dim                    = (C, H, W),
+            num_channels           = 64,
+            num_res_blocks         = 2,
+            channel_mult           = [1, 2, 2],
+            num_heads              = 4,
+            num_head_channels      = 64,
+            attention_resolutions  = "16",
+            dropout                = 0.1,
+            learn_sigma            = False,
+            class_cond             = False,
+            use_checkpoint         = False,
+            use_fp16               = False,
+            use_new_attention_order= False,
         ).to(device)
 
+
         # replace with the actual path to your TFD checkpoint
-        tfd_ckpt = "assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-8000.pt"
+        tfd_ckpt = "assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-30000.pt"
         state = torch.load(tfd_ckpt,
                            map_location=device,
                            weights_only=True)
+        print("Dynamics were successfully loaded!")
         wrapper_net.load_state_dict(state)
 
         state_dim = C * H * W
+        # ae = Autoencoder_unet(
+        #     dim=(1, 48, 48),
+        #     num_channels=64,
+        #     num_res_blocks=2,
+        #     channel_mult=[1, 1, 2, 3, 4],
+        #     num_heads=4,
+        #     num_head_channels=64,
+        #     attention_resolutions="16",
+        #     dropout=0.1,
+        #     learn_sigma=False,
+        #     class_cond=False,
+        #     use_checkpoint=False,
+        #     use_fp16=False,
+        #     use_new_attention_order=False,
+        # )
+
         ae = Autoencoder_unet(
-            dim=(1, 48, 48),
-            num_channels=64,
-            num_res_blocks=2,
-            channel_mult=[1, 1, 2, 3, 4],
-            num_heads=4,
-            num_head_channels=64,
-            attention_resolutions="16",
-            dropout=0.1,
-            learn_sigma=False,
-            class_cond=False,
-            use_checkpoint=False,
-            use_fp16=False,
-            use_new_attention_order=False,
+            dim                    = (C, H, W),
+            num_channels           = 128,
+            num_res_blocks         = 3,
+            channel_mult           = [1, 2, 2],
+            num_heads              = 4,
+            num_head_channels      = 128,
+            attention_resolutions  = "14,7",
+            dropout                = 0,
+            learn_sigma            = False,
+            class_cond             = False,
+            use_checkpoint         = False,
+            use_fp16               = False,
+            use_new_attention_order= False,
+            resblock_updown= True
         )
 
     else:
@@ -286,6 +336,36 @@ def load_model(ckpt_glob, dataset="cifar", device="cuda"):
     model.ckpt_path = latest
     print(f"> checkpoint loaded!")
     return model.to(device).eval()
+
+def strip_fid_from_checkpoint(in_ckpt: str, out_ckpt: str) -> str:
+    """
+    Remove all fid_train.* and fid_val.* keys from a Lightning checkpoint.
+    If in_ckpt == out_ckpt, writes to a new file with '_stripped_fid' before the extension.
+    Returns the path of the stripped checkpoint.
+    """
+    # if they passed the same path, create a new one
+    if os.path.abspath(in_ckpt) == os.path.abspath(out_ckpt):
+        base, ext = os.path.splitext(in_ckpt)
+        out_ckpt = f"{base}_stripped_fid{ext}"
+
+    # 1) Load the checkpoint (handles both Lightning‐style and raw state_dict)
+    ckpt = torch.load(in_ckpt, map_location="cpu")
+    sd = ckpt.get("state_dict", ckpt)
+
+    # 2) Remove all fid_train.* and fid_val.* entries
+    to_remove = [k for k in sd if k.startswith("fid_train.") or k.startswith("fid_val.")]
+    for k in to_remove:
+        sd.pop(k)
+
+    # 3) Save back
+    if "state_dict" in ckpt:
+        ckpt["state_dict"] = sd
+        torch.save(ckpt, out_ckpt)
+    else:
+        torch.save(sd, out_ckpt)
+
+    print(f"Removed {len(to_remove)} FID keys and wrote stripped checkpoint to\n    {out_ckpt}")
+    return out_ckpt
 
 def sample_and_save_grid(
     model,
@@ -537,6 +617,8 @@ if __name__ == "__main__":
     p.add_argument("--device",   type=str, default="cuda")
     args = p.parse_args()
 
+    # stripped_ckpt = strip_fid_from_checkpoint(args.ckpt, args.ckpt)
+
     model = load_model(args.ckpt, dataset=args.dataset, device=args.device)
 
     sample_and_save_grid(model, k=args.n_rows, t_max=args.t_max, n_iter=args.n_iter, device="cuda")
@@ -551,17 +633,16 @@ if __name__ == "__main__":
     #     model,
     #     t_max=args.t_max,
     #     n_iter=args.n_iter,
-    #     n_samples=args.n_samples,
     #     device=args.device,
     # )
 
-    # get_koop_info(K = model.koopman.operator.cpu().detach().numpy())
+    get_koop_info(K = model.koopman.operator.cpu().detach().numpy())
 
-    # gif_file = animate_sample_evolution(
-    #     model,
-    #     t_max=2.0,
-    #     n_samples=10,
-    #     max_modes=1569,
-    #     step=5,
-    #     # device and output_dir are optional
-    # )
+    gif_file = animate_sample_evolution(
+        model,
+        t_max=2.0,
+        n_samples=10,
+        max_modes=1569,
+        step=5,
+        # device and output_dir are optional
+    )

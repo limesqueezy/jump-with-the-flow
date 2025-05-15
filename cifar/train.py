@@ -299,7 +299,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
             RichProgressBar(),
             # checkpoint_cb,
             # ckpt_cb,
-            FIDTrainCallback(every_n_steps=200),
+            FIDTrainCallback(every_n_steps=3125),
             ckpt_fid_train,
             # FIDValCallback(),
             # ckpt_fid_val,

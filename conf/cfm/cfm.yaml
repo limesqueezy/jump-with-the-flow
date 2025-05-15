@@ -3,7 +3,7 @@ matcher:
   sigma:       0.0
 
 traj:
-  n_traj:      2000          # number of trajectories to generate
+  n_traj:      20_000          # number of trajectories to generate
   traj_steps:  100           # time-grid resolution
   chunk_size:  2000          # if n_traj cant fit in VRAM
 

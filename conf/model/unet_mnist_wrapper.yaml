@@ -14,3 +14,4 @@ class_cond:     false
 use_checkpoint: false
 use_fp16:       false
 use_new_attention_order:  false
+resblock_updown: false

@@ -31,6 +31,7 @@ def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cu
         decoded = model_generic.autoencoder.decoder(z)
 
     # reshape to (n_samples, C, H, W) and clamp
+    decoded = decoded[:,1:]
     imgs = (
         decoded[:, :spatial_dim]
         .view(n_samples, C, H, W)
