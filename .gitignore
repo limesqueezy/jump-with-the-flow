@@ -12,6 +12,8 @@ lightning_logs/
 *.zip
 *.png
 *.jpeg
+*.csv
+*.txt
 
 assets
 assets/

@@ -5,7 +5,14 @@
 # 1-step prediction
 
 # ‖zₖ‖ during k-step rollout starting from a real sample 
+import csv, os, time
+from pathlib import Path
 
+import numpy as np
+import torch
+import matplotlib
+matplotlib.use("Agg")                      # fully headless
+import matplotlib.pyplot as plt
 import math
 import os
 import glob
@@ -368,35 +375,100 @@ def strip_fid_from_checkpoint(in_ckpt: str, out_ckpt: str) -> str:
     return out_ckpt
 
 def sample_and_save_grid(
+        log_path : str = "sampler_scaling.csv",
+        save_path: str = "sampler_scaling.png",
+        dpi      : int = 400):
+    """
+    Read <log_path> and write a *single-curve* scaling plot to <save_path>.
+    No showing, no extra lines, no legend – just the data.
+    """
+    # ------------------------------------------------------------
+    # 1) read the CSV
+    # ------------------------------------------------------------
+    batch, ips = [], []
+    with open(log_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            batch.append(int(row["batch_size"]))
+            ips.append(float(row["imgs_per_sec"]))
+    if not batch:
+        raise RuntimeError(f"No data in {log_path}")
+
+    # ------------------------------------------------------------
+    # 2) make a fresh figure
+    # ------------------------------------------------------------
+    plt.close("all")                       # nuke any lingering state
+    fig, ax = plt.subplots(figsize=(3.5, 2.625), dpi=dpi)
+
+    ax.plot(batch, ips, marker="o", linewidth=1.2)
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel("Batch size (log$_2$ scale)")
+    ax.set_ylabel("Images per second")
+    ax.set_title("Sampler scaling with batch size", pad=4)
+    ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
+    fig.tight_layout()
+
+    # ------------------------------------------------------------
+    # 3) save & close
+    # ------------------------------------------------------------
+    ext = Path(save_path).suffix.lower()
+    if ext == ".pdf":
+        fig.savefig(save_path, bbox_inches="tight")
+    else:
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+def measure_sampler_scaling(
     model,
-    k: int,
-    t_max: int = 1,
-    n_iter: int = 1,
-    device: str = "cuda",
-    save_dir: str = "debug_samples",
+    *,
+    t_max      = 1.0,
+    n_iter     = 1,
+    start_pow  = 1,          # 2¹ = 2 samples
+    max_pows   = 10,         # 2¹⁰ = 1024
+    device     = "cuda",
+    log_path   = "sampler_scaling.csv",
+    verbose    = True,
 ):
     """
-    Draw k*k samples via sample_efficient(), arrange in a k×k grid,
-    and save under save_dir/grid_{k}x{k}.png.
-    Assumes sample_efficient(model, t_max, n_iter, n_samples, device) is in scope.
+    Times `sample_efficient` for batch sizes 2, 4, 8, … until OOM or 2**max_pows.
+
+    The CSV is recreated on every run so past data never lingers.
+    Columns: batch_size, elapsed_sec, imgs_per_sec, n_iter
     """
-    model = model.to(device).eval()
-    n_samples = k * k
+    # -------- 1) reset CSV ------------
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", newline="") as f:
+        csv.writer(f).writerow(
+            ["batch_size", "elapsed_sec", "imgs_per_sec", "n_iter"]
+        )
 
-    # get your samples (shape [n_samples, C, H, W], in [-1,1])
-    imgs = sample_efficient(model, t_max=t_max, n_iter=n_iter, n_samples=n_samples, device=device)
-    # rescale to [0,1]
-    imgs = (imgs + 1.0) / 2.0
+    # -------- 2) doubling sweep -------
+    for p in range(start_pow, max_pows + 1):
+        batch = 2 ** p
+        try:
+            _, elapsed = sample_efficient(
+                model,
+                t_max=t_max,
+                n_iter=n_iter,
+                n_samples=batch,
+                device=device,
+            )
+            ips = batch / elapsed
+            if verbose:
+                print(f"{batch:4d} imgs in {elapsed:6.2f}s → {ips:8.1f} imgs/s")
 
-    # make output dir
-    Path(save_dir).mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", newline="") as f:
+                csv.writer(f).writerow([batch, elapsed, ips, n_iter])
 
-    # build grid and write PNG
-    grid = vutils.make_grid(imgs, nrow=k, padding=2)
-    out_path = Path(save_dir) / f"grid_{k}x{k}.png"
-    vutils.save_image(grid, out_path)
+            torch.cuda.empty_cache()
 
-    print(f"Saved sample grid to {out_path}")
+        except torch.cuda.OutOfMemoryError:
+            if verbose:
+                print(f"⚠️  OOM reached at batch={batch}. Terminating sweep.")
+            torch.cuda.empty_cache()
+            break
+
 
 # def one_step(
 #     model,
@@ -602,6 +674,84 @@ def animate_sample_evolution(
     return gif_path
 
 
+
+def plot_sampler_scaling(
+        log_path : str  = "sampler_scaling.csv",
+        save_path: str  = "sampler_scaling.png",
+        dpi      : int  = 400,
+        add_ideal: bool = False):
+    """
+    Publication-quality plot of throughput vs. batch size.
+
+    Parameters
+    ----------
+    log_path : str   – CSV produced by `measure_sampler_scaling`
+    save_path: str   – where to save the figure (extension decides format)
+                       ".png"  → raster   with the requested `dpi`
+                       ".pdf"  → vector   (dpi ignored)
+    dpi      : int   – raster resolution; ignored for PDF
+    add_ideal: bool  – if True, draw an ideal linear-scaling reference line
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure   – the created figure (in case you want
+                                       to tweak it further in the notebook)
+    """
+    # ------------------------------------------------------------------
+    # 1. load CSV -------------------------------------------------------
+    batch_sizes, ips = [], []
+    with open(log_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            batch_sizes.append(int(row["batch_size"]))
+            ips.append(float(row["imgs_per_sec"]))
+
+    if not batch_sizes:
+        raise RuntimeError(f"No data found in {log_path}")
+
+    # sort just in case the CSV isn’t ordered
+    batch_sizes = np.array(batch_sizes)
+    ips         = np.array(ips)
+    order       = np.argsort(batch_sizes)
+    batch_sizes = batch_sizes[order]
+    ips         = ips[order]
+
+    # ------------------------------------------------------------------
+    # 2. make the figure ----------------------------------------------
+    plt.close("all")                           # make sure nothing stacks
+    fig, ax = plt.subplots(figsize=(3.5, 2.625), dpi=dpi)
+
+    ax.plot(batch_sizes, ips, marker="o", linewidth=1.25)
+
+    if add_ideal:
+        slope = ips[0] / batch_sizes[0]
+        ideal = slope * batch_sizes
+        ax.plot(batch_sizes, ideal, linestyle="--", linewidth=0.9, label="ideal")
+
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel("Batch size (log$_2$ scale)")
+    ax.set_ylabel("Images per second")
+    ax.set_title("Sampler scaling with batch size", pad=4)
+    ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
+
+    if add_ideal:
+        ax.legend(frameon=False)
+
+    fig.tight_layout()
+
+    # ------------------------------------------------------------------
+    # 3. save -----------------------------------------------------------
+    ext = Path(save_path).suffix.lower()
+    if ext == ".pdf":
+        fig.savefig(save_path, bbox_inches="tight")
+    else:                                    # treat everything else as raster
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+
+    return fig
+
+
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Debug: sample from Koopman model")
     p.add_argument("--ckpt",     type=str, default="checkpoints/cifar10-koopman-20250427-183648/last.ckpt",
@@ -621,7 +771,20 @@ if __name__ == "__main__":
 
     model = load_model(args.ckpt, dataset=args.dataset, device=args.device)
 
-    sample_and_save_grid(model, k=args.n_rows, t_max=args.t_max, n_iter=args.n_iter, device="cuda")
+    measure_sampler_scaling(
+        model,
+        t_max=args.t_max,
+        n_iter=args.n_iter,
+        device=args.device,
+    )
+
+    plot_sampler_scaling(
+        log_path="sampler_scaling.csv",
+        save_path="sampler_scaling.png",
+        dpi=400,
+    )
+
+    breakpoint()
 
     # sample_analytical_plot(model,
     #                    output_dir="metrics",

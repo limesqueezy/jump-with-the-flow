@@ -5,7 +5,7 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader, random_split, TensorDataset
 import lightning as L
-from .samplers import TimeGroupedSampler, ListSampler
+from .samplers import TimeGroupedSampler, ListSampler, RandomTimeSampler
 from pathlib import Path
 from typing import Union
 
@@ -22,6 +22,7 @@ class DynamicsDataModule(L.LightningDataModule):
         val_frac: float = 0.2,
         chunk_steps: int = 2000,
         eval_chunk: int = 2048,
+        sampler_mode: str = "time_grouped",
         device = "cuda"
     ):
         super().__init__()
@@ -33,6 +34,7 @@ class DynamicsDataModule(L.LightningDataModule):
         self.chunk_steps= chunk_steps
         self.eval_chunk = eval_chunk
         self.device     = device
+        self.sampler_mode  = sampler_mode
 
         self.cache_path = Path(cache_dir) / f"{dynamics_path}.pth"
 
@@ -197,15 +199,24 @@ class DynamicsDataModule(L.LightningDataModule):
         self.val_sampler   = ListSampler(self.val_ordered_indices)
 
     def train_dataloader(self):
+        if self.sampler_mode == "random":
+            sampler = RandomTimeSampler(
+                time_steps=len(self.t_grid),
+                group_size=self.traj.size(1),
+            )
+        elif self.sampler_mode == "time_grouped":  # reverse-time order (sorta "curriculum learning")
+            sampler = self.train_sampler
+
         return DataLoader(
             self.full_ds,
             batch_size=self.batch_size,
-            sampler=self.train_sampler,
+            sampler=sampler,
             num_workers=4,
             pin_memory=True,
             persistent_workers=True,
             drop_last=True,
         )
+
 
     def val_dataloader(self):
         return DataLoader(
@@ -217,6 +228,19 @@ class DynamicsDataModule(L.LightningDataModule):
             persistent_workers=False,
             drop_last=False,
         )
+    
+    # def train_dataloader(self):
+    #     sampler = RandomTimeSampler(time_steps=100, group_size=20000)
+    #     return DataLoader(
+    #         self.full_ds,
+    #         batch_size=self.batch_size,
+    #         sampler=sampler,
+    #         # sampler=self.train_sampler,
+    #         num_workers=16,
+    #         pin_memory=True,
+    #         persistent_workers=True,
+    #         drop_last=True,
+    #     )
 
     def test_dataloader(self):
         pass

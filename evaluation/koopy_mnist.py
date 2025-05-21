@@ -26,8 +26,6 @@ def load_net(ckpt_glob, device="cuda"):
     ckpt_path = Path(latest)
     assert ckpt_path.is_file(), "Checkpoint not found"
 
-
-
     C, H, W = 1, 28, 28
     wrapper_net = UNetWrapperKoopman(
         dim=(1, 28, 28), 
@@ -41,10 +39,10 @@ def load_net(ckpt_glob, device="cuda"):
     #     num_channels=192, 
     #     num_res_blocks=4,
     #     num_heads=4,
-
     # ).to("cpu")
 
-    ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20000.pt", map_location=device, weights_only=True)
+    # ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20000.pt", map_location=device, weights_only=True)
+    ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20.pt", map_location=device, weights_only=True)
     wrapper_net.load_state_dict(ckpt)
 
     state_dim = C * H * W
@@ -52,10 +50,8 @@ def load_net(ckpt_glob, device="cuda"):
         dim=(C, H, W),
         num_channels=32,
         num_res_blocks=1,
-        attention_resolutions="14,7"
+        # attention_resolutions="14,7"
     )
-
-
 
     koop_op = GenericOperator_state(1 + 2 * state_dim)
 
@@ -75,21 +71,21 @@ def load_net(ckpt_glob, device="cuda"):
     print(f"> checkpoint loaded!")
     return model.to(device).eval()
 
-# ──────────────────────────────────────────────────────────────────────
 def export_real(root, n, out):
     ds = MNIST(root=root, train=True, download=True, transform=ToTensor())
     out.mkdir(parents=True, exist_ok=True)
     for i in range(n):
         save_image(ds[i][0].expand(3, -1, -1), out/f"{i:05d}.png")  # fake-RGB
 
-# ──────────────────────────────────────────────────────────────────────
 @torch.no_grad()
-def sample(net, n, bs, steps, device, out):
-    """
-    Generate ``n`` MNIST-sized images with the Koopman pipeline and
-    write them to ``out`` as RGB PNG files, ready for FID.
-    `steps` is forwarded to ``sample_efficient`` as ``n_iter``.
-    """
+def sample(net, n, bs, steps, device, out, x0=None):
+
+    C, H, W = 1, 28, 28
+    if x0 is None:
+        x0 = torch.randn(n, C, H, W, device=device)
+    else:
+        assert x0.shape[0] == n, f"x0 has {x0.shape[0]} but expected {n}"
+
     out.mkdir(parents=True, exist_ok=True)
     done = 0
     with Progress("[progress.description]{task.description}",
@@ -97,22 +93,25 @@ def sample(net, n, bs, steps, device, out):
         task = p.add_task("Generating", total=n)
         while done < n:
             cur = min(bs, n - done)
+            batch_x0 = x0[done: done + cur].to(device, non_blocking=True)
             imgs = (
                 sample_efficient(
                     net,
+                    t_max    = 1,
                     n_iter   = steps,
                     n_samples= cur,
                     device   = device,
+                    x_spatial= batch_x0,
                 )                                    # (cur,1,28,28) in [-1,1]
                 .add_(1).div_(2)                     # → [0,1]
                 .expand(-1, 3, -1, -1)               # fake-RGB for FID
             )
             for j, img in enumerate(imgs):
                 save_image(img, out / f"{done+j:05d}.png")
+            
             done += cur
             p.update(task, advance=cur)
 
-# ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)

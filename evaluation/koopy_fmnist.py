@@ -1,7 +1,7 @@
 import glob
 import os, argparse, subprocess, tempfile, torch
 from pathlib import Path
-from torchvision.datasets import MNIST
+from torchvision.datasets import FashionMNIST
 from torchvision.transforms import ToTensor
 from torchvision.utils import save_image
 from rich.progress import Progress, BarColumn, TimeElapsedColumn, TimeRemainingColumn
@@ -39,7 +39,6 @@ def load_net(ckpt_glob, device="cuda"):
     #     num_channels=192, 
     #     num_res_blocks=4,
     #     num_heads=4,
-
     # ).to("cpu")
 
     ckpt = torch.load("assets/unet_dynamics/fashion_mnist_full_otcfm_step-25000.pt", map_location=device, weights_only=True)
@@ -47,24 +46,24 @@ def load_net(ckpt_glob, device="cuda"):
 
     state_dim = C * H * W
     # Shallow
-    # ae = Autoencoder_unet(
-    #     dim=(C, H, W),
-    #     num_channels=32,
-    #     num_res_blocks=1,
-    #     attention_resolutions="14,7"
-    # )
-
-    # Deep
     ae = Autoencoder_unet(
         dim=(C, H, W),
-        num_channels=128,
-        channel_mult=[1, 2, 2],
-        num_res_blocks=3,
-        num_heads=4,
-        attention_resolutions="14,7",
-        bottleneck=False,
-        resblock_updown=True,
+        num_channels=32,
+        num_res_blocks=1,
+        attention_resolutions="14,7"
     )
+
+    # Deep
+    # ae = Autoencoder_unet(
+    #     dim=(C, H, W),
+    #     num_channels=128,
+    #     channel_mult=[1, 2, 2],
+    #     num_res_blocks=3,
+    #     num_heads=4,
+    #     attention_resolutions="14,7",
+    #     bottleneck=False,
+    #     resblock_updown=True,
+    # )
 
     koop_op = GenericOperator_state(1 + 2 * state_dim)
 
@@ -86,7 +85,7 @@ def load_net(ckpt_glob, device="cuda"):
 
 # ──────────────────────────────────────────────────────────────────────
 def export_real(root, n, out):
-    ds = MNIST(root=root, train=True, download=True, transform=ToTensor())
+    ds = FashionMNIST(root=root, train=True, download=True, transform=ToTensor())
     out.mkdir(parents=True, exist_ok=True)
     for i in range(n):
         save_image(ds[i][0].expand(3, -1, -1), out/f"{i:05d}.png")  # fake-RGB

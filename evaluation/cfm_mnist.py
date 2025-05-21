@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""
-Evaluate a CFM checkpoint **on MNIST** and compute FID.
-
-• (C,H,W) = (1,28,28)   •   integrate t ∈ [0,1] with dopri5
-
-Usage
------
-python eval_mnist.py \
-       --checkpoint path/to/ckpt.pt \
-       --num-samples 50_000 \
-       --batch-size  2048 \
-       --device cuda
-"""
 import os, argparse, subprocess, tempfile, torch
 from pathlib import Path
 from torchvision.datasets import MNIST
@@ -22,7 +8,6 @@ from torchdyn.core import NeuralODE
 from torchcfm.models.unet import UNetModel
 import cleanfid.fid as fid
 
-# ──────────────────────────────────────────────────────────────────────
 def load_net(ckpt, device):
     net = UNetModel(
         dim              =(1, 28, 28),
@@ -52,9 +37,9 @@ def export_real(root, n, out):
         save_image(ds[i][0].expand(3, -1, -1), out/f"{i:05d}.png")  # fake-RGB
 
 @torch.no_grad()
-def sample(net, n, bs, steps, device, out):
+def sample(net, n, bs, steps, device, out, x0=None):
     C, H, W = 1, 28, 28
-    t_span  = torch.linspace(0., 1., steps, device=device)         # 0 → 1
+    t_span  = torch.linspace(0., 1., steps, device=device)         # 0 - > 1
 
     node = NeuralODE(
         net,
@@ -64,6 +49,9 @@ def sample(net, n, bs, steps, device, out):
         rtol        =1e-4,
     )
 
+    if x0 is None:
+        x0 = torch.randn(n, C, H, W, device=device)
+
     done = 0
     out.mkdir(parents=True, exist_ok=True)
     with Progress("[progress.description]{task.description}",
@@ -71,8 +59,10 @@ def sample(net, n, bs, steps, device, out):
         task = p.add_task("Generating", total=n)
         while done < n:
             cur = min(bs, n - done)
-            x0  = torch.randn(cur, C, H, W, device=device)
-            imgs = node.trajectory(x0, t_span)[-1].clamp(-1, 1).add_(1).div_(2)
+
+            batch_x0 = x0[done: done+cur].to(device, non_blocking=True)
+            # breakpoint()
+            imgs = node.trajectory(batch_x0, t_span)[-1].clamp(-1, 1).add_(1).div_(2)
             imgs = imgs.expand(-1, 3, -1, -1)
             for j, img in enumerate(imgs):
                 save_image(img, out/f"{done+j:05d}.png")

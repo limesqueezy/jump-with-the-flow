@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-Evaluate a CFM checkpoint **on MNIST** and compute FID.
-
-• (C,H,W) = (1,28,28)   •   integrate t ∈ [0,1] with dopri5
-
-Usage
------
-python eval_mnist.py \
-       --checkpoint path/to/ckpt.pt \
-       --num-samples 50_000 \
-       --batch-size  2048 \
-       --device cuda
-"""
 import os, argparse, subprocess, tempfile, torch
 from pathlib import Path
 from torchvision.datasets import FashionMNIST

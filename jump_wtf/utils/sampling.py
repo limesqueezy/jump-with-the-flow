@@ -1,8 +1,9 @@
 import torch
 from jump_wtf.operators.utils import get_koop_continuous
-from time import time
+import time
 
-def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cuda"):
+def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cuda", x_spatial=None):
+
     """
     Runs the Koopman evolution and returns a NumPy array
     """
@@ -15,20 +16,43 @@ def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cu
     W   = enc.image_size
     spatial_dim = C * H * W
     #    noise: [n_samples, C, H, W] flattened to [n_samples, spatial_dim]
-    x_spatial = torch.randn((n_samples, C, H, W), device=device)
+    
+    if x_spatial is None:
+        x_spatial = torch.randn((n_samples, C, H, W), device=device)
+    else:                                    # <-- guarantees same seed across samplers
+        assert x_spatial.shape == (n_samples, C, H, W), \
+            f"Noise shape mismatch: expected {(n_samples, C, H, W)}, got {x_spatial.shape}"
+
+    # breakpoint()
     x_flat    = x_spatial.view(n_samples, spatial_dim)
     t0        = torch.zeros((n_samples, 1), device=device)
     x         = torch.cat((x_flat, t0), dim=1)  # shape [n_samples, spatial_dim+1]
 
     koop_op = get_koop_continuous(model_generic, model_generic.koopman.operator_dim, dt)
-    with torch.no_grad():
-        z = model_generic.autoencoder.encoder(x)
-        for _ in range(n_iter):
-            z = z @ koop_op
-            x_hat = model_generic.autoencoder.decoder(z)
-            z = model_generic.autoencoder.encoder(x_hat) @ koop_op
 
-        decoded = model_generic.autoencoder.decoder(z)
+
+    with torch.no_grad():
+        # --------------------------------------------------------------
+        # -------- TIMED SECTION (encoder → Koopman loop) -------------
+        # torch.cuda.synchronize()
+        # start = time.perf_counter()
+
+        # z = model_generic.autoencoder.encoder(x)
+        # for _ in range(n_iter):
+        #     z = z @ koop_op
+        #     x_hat = model_generic.autoencoder.decoder(z)
+        #     z = model_generic.autoencoder.encoder(x_hat) @ koop_op
+        # decoded = model_generic.autoencoder.decoder(z)
+
+        for _ in range(n_iter):
+            z = model_generic.autoencoder.encoder(x)
+            z = z @ koop_op
+            x = model_generic.autoencoder.decoder(z)
+        decoded = x
+
+        # torch.cuda.synchronize()
+        # elapsed = time.perf_counter() - start
+        # --------------------------------------------------------------
 
     # reshape to (n_samples, C, H, W) and clamp
     decoded = decoded[:,1:]
@@ -37,4 +61,4 @@ def sample_efficient(model_generic, t_max=1, n_iter=100, n_samples=1, device="cu
         .view(n_samples, C, H, W)
         .clamp(-1, 1)
     )
-    return imgs
+    return imgs#, elapsed

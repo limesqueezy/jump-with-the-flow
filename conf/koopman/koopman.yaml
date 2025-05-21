@@ -28,6 +28,10 @@ train:
   devices: [0]
   device: cuda
 
+  sampler_mode: "time_grouped"
+
+  resume_ckpt: False
+
   # ─── Koopman DataModule settings ─────────────────────────────
   batch_size:     256
   num_workers:    4
