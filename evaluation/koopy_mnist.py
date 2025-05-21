@@ -41,8 +41,8 @@ def load_net(ckpt_glob, device="cuda"):
     #     num_heads=4,
     # ).to("cpu")
 
-    # ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20000.pt", map_location=device, weights_only=True)
-    ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20.pt", map_location=device, weights_only=True)
+    ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20000.pt", map_location=device, weights_only=True) 
+    # ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20.pt", map_location=device, weights_only=True) # for our 31.586
     wrapper_net.load_state_dict(ckpt)
 
     state_dim = C * H * W
@@ -50,7 +50,7 @@ def load_net(ckpt_glob, device="cuda"):
         dim=(C, H, W),
         num_channels=32,
         num_res_blocks=1,
-        # attention_resolutions="14,7"
+        attention_resolutions="14,7" # Not used for our 31.586
     )
 
     koop_op = GenericOperator_state(1 + 2 * state_dim)
@@ -97,7 +97,7 @@ def sample(net, n, bs, steps, device, out, x0=None):
             imgs = (
                 sample_efficient(
                     net,
-                    t_max    = 1,
+                    t_max    = 2, # CHANGE
                     n_iter   = steps,
                     n_samples= cur,
                     device   = device,
