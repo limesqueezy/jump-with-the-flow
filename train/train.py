@@ -11,7 +11,7 @@ from torchdyn.core import NeuralODE
 from tqdm import trange
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
 from torchcfm.models.unet import UNetModel
-from cifar.utils_cifar import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter, generate_trajectories
+from train.utils import ema, infiniteloop, log_generated_samples, log_final_trajectories, LoggingSummaryWriter, generate_trajectories
 from tqdm.auto import trange
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import Trainer
@@ -290,7 +290,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     ckpt_fid_train = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_train", mode="min",
         filename="best-fid-train-{step:.0f}-{fid_train:.3f}",
-        save_top_k=1, every_n_train_steps=3125, save_on_train_epoch_end=False)
+        save_top_k=1, every_n_train_steps=400, save_on_train_epoch_end=False)
 
     # ckpt_fid_val   = ModelCheckpoint(
     #     dirpath=ckpt_root, monitor="fid_val", mode="min",
@@ -301,7 +301,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
             RichProgressBar(),
             # checkpoint_cb,
             ckpt_cb,
-            FIDTrainCallback(every_n_steps=3125),
+            FIDTrainCallback(every_n_steps=400),
             ckpt_fid_train,
             # FIDValCallback(),
             # ckpt_fid_val,

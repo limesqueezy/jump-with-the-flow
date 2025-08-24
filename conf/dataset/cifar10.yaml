@@ -1,4 +1,4 @@
-_target_: jump_wtf.data.cifar.CIFARWrapper
+_target_: jump_wtf.data.train.CIFARWrapper
 
 root: ${paths.raw_dir}
 train: true

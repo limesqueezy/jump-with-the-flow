@@ -77,8 +77,8 @@ def main():
             net     = koop_net,
             n       = args.num_samples,
             bs      = args.batch_size,
-            # steps   = args.ode_steps,
-            steps   = 1,
+            steps   = args.ode_steps,
+            # steps   = 1,
             device  = device,
             out     = koop_out,
             x0      = x0

@@ -91,7 +91,7 @@ class FIDTrainCallback(Callback):
 #         pl_module.log(
 #             "fid_train",
 #             score,
-#             on_step=True,       # step‐wise metric, requried!
+#             on_step=True,       # step‐wise metric, required!
 #             on_epoch=False,
 #             prog_bar=True,
 #             sync_dist=True
@@ -162,8 +162,7 @@ def compute_real_stats(
 
     fid = FrechetInceptionDistance(2048, normalize=True).to(device)
     
-    fid.set_dtype(torch.float32)
-
+    # fid.set_dtype(torch.float32) # <-- This together with the number of features makes it faster but less accurate
 
     # if they passed a Dataset, wrap it
     if not isinstance(data, DataLoader):

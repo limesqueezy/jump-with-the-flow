@@ -108,6 +108,7 @@ def sample(net, n, bs, steps, device, out):
             imgs = (
                 sample_efficient(
                     net,
+                    t_max    = 2,                     # CHANGE
                     n_iter   = steps,
                     n_samples= cur,
                     device   = device,
@@ -126,7 +127,7 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--data-root",   default="assets/raw_datasets")
     ap.add_argument("--num-samples", type=int, default=10_000)
-    ap.add_argument("--batch-size",  type=int, default=4096)
+    ap.add_argument("--batch-size",  type=int, default=1024)
     ap.add_argument("--ode-steps",   type=int, default=100)
     ap.add_argument("--device",      default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()

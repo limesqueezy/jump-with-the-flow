@@ -422,7 +422,7 @@ def measure_sampler_scaling(
     model,
     *,
     t_max      = 1.0,
-    n_iter     = 1,
+    n_iter     = 5,
     start_pow  = 1,          # 2¹ = 2 samples
     max_pows   = 10,         # 2¹⁰ = 1024
     device     = "cuda",
@@ -784,8 +784,6 @@ if __name__ == "__main__":
         dpi=400,
     )
 
-    breakpoint()
-
     # sample_analytical_plot(model,
     #                    output_dir="metrics",
     #                    t_max=2.0,
@@ -799,13 +797,13 @@ if __name__ == "__main__":
     #     device=args.device,
     # )
 
-    get_koop_info(K = model.koopman.operator.cpu().detach().numpy())
+    # get_koop_info(K = model.koopman.operator.cpu().detach().numpy())
 
-    gif_file = animate_sample_evolution(
-        model,
-        t_max=2.0,
-        n_samples=10,
-        max_modes=1569,
-        step=5,
-        # device and output_dir are optional
-    )
+    # gif_file = animate_sample_evolution(
+    #     model,
+    #     t_max=2.0,
+    #     n_samples=10,
+    #     max_modes=1569,
+    #     step=5,
+    #     # device and output_dir are optional
+    # )

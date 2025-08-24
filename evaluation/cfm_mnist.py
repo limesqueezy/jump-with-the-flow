@@ -39,7 +39,7 @@ def export_real(root, n, out):
 @torch.no_grad()
 def sample(net, n, bs, steps, device, out, x0=None):
     C, H, W = 1, 28, 28
-    t_span  = torch.linspace(0., 1., steps, device=device)         # 0 - > 1
+    t_span  = torch.linspace(0., 1., steps+1, device=device)         # 0 - > 1
 
     node = NeuralODE(
         net,
@@ -61,7 +61,7 @@ def sample(net, n, bs, steps, device, out, x0=None):
             cur = min(bs, n - done)
 
             batch_x0 = x0[done: done+cur].to(device, non_blocking=True)
-            # breakpoint()
+
             imgs = node.trajectory(batch_x0, t_span)[-1].clamp(-1, 1).add_(1).div_(2)
             imgs = imgs.expand(-1, 3, -1, -1)
             for j, img in enumerate(imgs):
@@ -74,12 +74,12 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--data-root",   default="assets/raw_datasets")
     ap.add_argument("--num-samples", type=int, default=10_000)
-    ap.add_argument("--batch-size",  type=int, default=4096)
+    ap.add_argument("--batch-size",  type=int, default=1024)
     ap.add_argument("--ode-steps",   type=int, default=100)
     ap.add_argument("--device",      default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
-    work = Path("/mnt/disk1/ari/koopy_eval/cfm/mnist")
+    work = Path("/mnt/disk6/ari/koopy_eval/cfm/mnist")
     real, gen = work/"real", work/"generated"
 
     print("→ exporting real MNIST images")

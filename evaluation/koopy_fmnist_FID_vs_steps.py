@@ -1,3 +1,4 @@
+import csv
 import glob
 import os, argparse, subprocess, tempfile, torch
 from pathlib import Path
@@ -17,7 +18,7 @@ from jump_wtf.models.unet_wrapper import UNetWrapperKoopman
 def load_net(ckpt_glob, device="cuda"):
     """
     Finds latest .ckpt, rebuilds AE & Koopman operator, loads weights.
-    Supports 'mnist' (1×28×28) or 'cifar' (3×32×32).
+    Supports 'mnist' (1×28×28) or 'train' (3×32×32).
     """
     paths = glob.glob(ckpt_glob)
     if not paths:
@@ -177,16 +178,24 @@ def main():
         fid_scores[steps] = fid_val
         print(f"n_iter={steps:>4d}  →  FID = {fid_val:.3f}")
 
-    # Save numeric results
-    out_txt = work / "fid_vs_steps.txt"
-    with out_txt.open("w") as fp:
-        for k, v in sorted(fid_scores.items()):
-            fp.write(f"{k}\t{v}\n")
+    # # Save numeric results
+    # out_txt = work / "fid_vs_steps_mnist.txt"
+    # with out_txt.open("w") as fp:
+    #     for k, v in sorted(fid_scores.items()):
+    #         fp.write(f"{k}\t{v}\n")
+    out_csv = work / "fid_vs_steps_mnist.csv"
+    with out_csv.open("w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        # write header
+        writer.writerow(["steps", "fid"])
+        # write each (step, fid) pair
+        for step, fid_val in sorted(fid_scores.items()):
+            writer.writerow([step, fid_val])
 
     # Plot figure
     plot_fid_curve(fid_scores, work)
-    print("Curve saved to :", work / "fid_vs_steps.png")
-    print("Raw numbers    :", out_txt)
+    print("Curve saved to :", work / "fid_vs_steps_mnist.png")
+    print("Raw numbers    :", out_csv)
 
 if __name__ == "__main__":
     main()

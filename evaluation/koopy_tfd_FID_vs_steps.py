@@ -1,12 +1,14 @@
+import csv
 import glob
 import os, argparse, subprocess, tempfile, torch
 from pathlib import Path
-from torchvision.datasets import MNIST
-from torchvision.transforms import ToTensor
+from torchvision.transforms import ToTensor, Resize, Compose
+from jump_wtf.data.toronto_face import TorontoFaceDataset
 from torchvision.utils import save_image
 from rich.progress import Progress, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 from jump_wtf.utils.sampling import sample_efficient
 import cleanfid.fid as fid
+
 import matplotlib.pyplot as plt
 from jump_wtf.models.model import Model
 from jump_wtf.models.autoencoder import Autoencoder_unet
@@ -16,7 +18,7 @@ from jump_wtf.models.unet_wrapper import UNetWrapperKoopman
 def load_net(ckpt_glob, device="cuda"):
     """
     Finds latest .ckpt, rebuilds AE & Koopman operator, loads weights.
-    Supports 'mnist' (1×28×28) or 'cifar' (3×32×32).
+    Supports 'mnist' (1×28×28) or 'train' (3×32×32).
     """
     paths = glob.glob(ckpt_glob)
     if not paths:
@@ -29,30 +31,80 @@ def load_net(ckpt_glob, device="cuda"):
     C, H, W = 1, 28, 28
     wrapper_net = UNetWrapperKoopman(
         dim=(1, 28, 28), 
-        num_channels=32, 
-        num_res_blocks=1,
-        # attention_resolutions="14,7"
+        num_channels=64, 
+        num_res_blocks=2,
+        num_heads=4,
     ).to("cpu")
 
-    # wrapper_net = UNetWrapperKoopman(
-    #     dim=(1, 28, 28), 
-    #     num_channels=192, 
-    #     num_res_blocks=4,
-    #     num_heads=4,
-    # ).to("cpu")
-
-    # ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20000.pt", map_location=device, weights_only=True)
-    ckpt = torch.load("assets/unet_dynamics/mnist_full_otcfm_step-20.pt", map_location=device, weights_only=True)
-
-    wrapper_net.load_state_dict(ckpt)
+    ckpt = torch.load("assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-30000.pt", map_location=device, weights_only=True)
+    wrapper_net.load_state_dict(ckpt, strict=False)
 
     state_dim = C * H * W
+    # ae = Autoencoder_unet(
+    #     dim=(C, H, W),
+    #     num_channels=128,
+    #     channel_mult=[1, 2, 2],
+    #     num_res_blocks=3,
+    #     num_heads=4,
+    #     attention_resolutions="14,7",
+    #     bottleneck=False,
+    #     resblock_updown=True,
+    # )
+
+    # ae = Autoencoder_unet(
+    #     dim=(1, 28, 28),
+    #     num_channels=64,
+    #     channel_mult=[1, 2, 2],
+    #     num_res_blocks=2,
+    #     num_heads=4,
+    #     num_head_channels=64,
+    #     attention_resolutions="14,7",
+    #     dropout=0.1,
+    #     learn_sigma=False,
+    #     class_cond=False,
+    #     use_checkpoint=False,
+    #     use_fp16=False,
+    #     use_new_attention_order=False,
+    #     bottleneck=False,
+    #     resblock_updown=True,
+    # )
+
     ae = Autoencoder_unet(
-        dim=(C, H, W),
-        num_channels=32,
-        num_res_blocks=1,
-        # attention_resolutions="14,7"
+        dim=(1, 28, 28),            # wrapper.dim
+        num_channels=64,            # wrapper.num_channels
+        num_res_blocks=2,           # wrapper.num_res_blocks
+        channel_mult=[1, 2, 2],     # wrapper.channel_mult
+        num_heads=4,                # wrapper.num_heads
+        num_head_channels=64,       # wrapper.num_head_channels
+        attention_resolutions="16", # wrapper.attention_resolutions
+        dropout=0.1,                # wrapper.dropout
+        learn_sigma=False,          # wrapper.learn_sigma
+        class_cond=False,           # wrapper.class_cond
+        use_checkpoint=False,       # wrapper.use_checkpoint
+        use_fp16=False,             # wrapper.use_fp16
+        use_new_attention_order=False,
     )
+
+    # ae = Autoencoder_unet(
+    #     dim=(1, 28, 28),            # wrapper.dim
+    #     num_channels=128,            # wrapper.num_channels
+    #     num_res_blocks=3,           # wrapper.num_res_blocks
+    #     channel_mult=[1, 2, 2],     # wrapper.channel_mult
+    #     num_heads=4,                # wrapper.num_heads
+    #     num_head_channels=64,       # wrapper.num_head_channels
+    #     attention_resolutions="14,7", # wrapper.attention_resolutions
+    #     dropout=0.1,                # wrapper.dropout
+    #     bottleneck          = False,
+    #     resblock_updown     = True,
+    #     learn_sigma         = False,
+    #     class_cond          = False,
+    #     use_checkpoint      = False,
+    #     use_fp16            = False,
+    #     use_new_attention_order = False,
+    # )
+
+
+
 
     koop_op = GenericOperator_state(1 + 2 * state_dim)
 
@@ -72,12 +124,24 @@ def load_net(ckpt_glob, device="cuda"):
     print(f"> checkpoint loaded!")
     return model.to(device).eval()
 
+# ──────────────────────────────────────────────────────────────────────
 def export_real(root, n, out):
-    ds = MNIST(root=root, train=True, download=True, transform=ToTensor())
+    ds = TorontoFaceDataset(
+        root=root,
+        train=None,
+        transform=Compose([
+            Resize((28, 28)),
+            ToTensor()
+        ])
+    )
     out.mkdir(parents=True, exist_ok=True)
-    for i in range(n):
-        save_image(ds[i][0].expand(3, -1, -1), out/f"{i:05d}.png")  # fake-RGB
+    total = len(ds)
+    for i in range(min(n, total)):
+        img, _ = ds[i]
+        save_image(img.expand(3, -1, -1), out / f"{i:05d}.png")
 
+
+# ──────────────────────────────────────────────────────────────────────
 @torch.no_grad()
 def sample(net, n, bs, steps, device, out, x0=None):
 
@@ -109,7 +173,6 @@ def sample(net, n, bs, steps, device, out, x0=None):
             )
             for j, img in enumerate(imgs):
                 save_image(img, out / f"{done+j:05d}.png")
-            
             done += cur
             p.update(task, advance=cur)
 
@@ -126,20 +189,22 @@ def plot_fid_curve(fid_results, out_dir):
     plt.savefig(out_dir / "fid_vs_steps.png")
     plt.close()
 
+
+# ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--data-root",   default="assets/raw_datasets")
-    ap.add_argument("--num-samples", type=int, default=10_000)            # 5 k should be fine for trends
+    ap.add_argument("--num-samples", type=int, default=10_000)
     ap.add_argument("--batch-size",  type=int, default=4096)
-    ap.add_argument("--steps",   type=str, default="1, 2, 3, 5, 10, 20, 60, 100")
+    ap.add_argument("--steps",       type=str, default="1, 2, 3, 5, 10, 20, 60, 100")
     ap.add_argument("--device",      default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
     step_list = [int(s) for s in args.steps.split(",")]
-    work = Path("/mnt/disk1/ari/koopy_eval/koop/mnist")
+    work = Path("/mnt/disk1/ari/koopy_eval/koop/tfd")
     real = work / "real"
-    print("→ exporting real MNIST images")
+    print("→ exporting real TFD images")
     export_real(args.data_root, args.num_samples, real)
 
     print("→ loading checkpoint")
@@ -162,16 +227,24 @@ def main():
         fid_scores[steps] = fid_val
         print(f"n_iter={steps:>4d}  →  FID = {fid_val:.3f}")
 
-    # Save numeric results
-    out_txt = work / "fid_vs_steps.txt"
-    with out_txt.open("w") as fp:
-        for k, v in sorted(fid_scores.items()):
-            fp.write(f"{k}\t{v}\n")
+    # # Save numeric results
+    # out_txt = work / "fid_vs_steps_mnist.txt"
+    # with out_txt.open("w") as fp:
+    #     for k, v in sorted(fid_scores.items()):
+    #         fp.write(f"{k}\t{v}\n")
+    out_csv = work / "fid_vs_steps_mnist.csv"
+    with out_csv.open("w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        # write header
+        writer.writerow(["steps", "fid"])
+        # write each (step, fid) pair
+        for step, fid_val in sorted(fid_scores.items()):
+            writer.writerow([step, fid_val])
 
     # Plot figure
     plot_fid_curve(fid_scores, work)
-    print("Curve saved to :", work / "fid_vs_steps.png")
-    print("Raw numbers    :", out_txt)
+    print("Curve saved to :", work / "fid_vs_steps_mnist.png")
+    print("Raw numbers    :", out_csv)
 
 if __name__ == "__main__":
     main()

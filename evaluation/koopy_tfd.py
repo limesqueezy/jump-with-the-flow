@@ -34,7 +34,8 @@ def load_net(ckpt_glob, device="cuda"):
         num_heads=4,
     ).to("cpu")
 
-    ckpt = torch.load("assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-30000.pt", map_location=device, weights_only=True)
+    # ckpt = torch.load("assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-30000.pt", map_location=device, weights_only=True)
+    ckpt = torch.load("assets/unet_dynamics/toronto_face_toronto_face_otcfm_step-5000.pt", map_location=device, weights_only=True)
     wrapper_net.load_state_dict(ckpt, strict=False)
 
     state_dim = C * H * W
@@ -157,6 +158,7 @@ def sample(net, n, bs, steps, device, out):
             imgs = (
                 sample_efficient(
                     net,
+                    t_max=2,                     # CHANGE
                     n_iter   = steps,
                     n_samples= cur,
                     device   = device,
@@ -175,12 +177,12 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--data-root",   default="assets/raw_datasets")
     ap.add_argument("--num-samples", type=int, default=10_000)
-    ap.add_argument("--batch-size",  type=int, default=2058)
+    ap.add_argument("--batch-size",  type=int, default=1024)
     ap.add_argument("--ode-steps",   type=int, default=100)
     ap.add_argument("--device",      default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
-    work = Path("/mnt/disk1/ari/koopy_eval/koop/tfd")
+    work = Path("/mnt/disk6/ari/koopy_eval/koop/tfd")
 
     real, gen = work/"real", work/"generated"
 
