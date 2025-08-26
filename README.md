@@ -15,9 +15,6 @@ jump_wtf/           # core code
 evaluation/         # dataset-specific sampling, FID sweeps, figures
 spectral_*.ipynb    # spectral analysis notebooks (per dataset)
 logs/               # TensorBoard (symlink)
-checkpoints/        # saved weights
-generated_samples/  # exported grids/samples
-metrics/            # spectral metrics (eigs, singulars, ranks, etc.)
 assets/             # FID stats, cached data (symlink)
 ```
 
