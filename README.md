@@ -21,6 +21,12 @@ metrics/            # spectral metrics (eigs, singulars, ranks, etc.)
 assets/             # FID stats, cached data (symlink)
 ```
 
+Create a conda environment,
+
+```
+conda env create -f environment.yml
+```
+
 If you want access to the assets (dynamics, past weights etc),
 
 ```

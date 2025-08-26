@@ -1,4 +1,4 @@
-name: test-koop
+name: koopy
 channels:
   - conda-forge
   - defaults
