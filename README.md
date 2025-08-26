@@ -21,12 +21,18 @@ metrics/            # spectral metrics (eigs, singulars, ranks, etc.)
 assets/             # FID stats, cached data (symlink)
 ```
 
+If you want access to the assets (dynamics, past weights etc),
+
+```
+ln -s /mnt/disk6/ari/koopy_assets assets
+```
+
 To train CFM / Koopman on MNIST overwriting some of Hydra's preset values,
 
 ```
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
 CUDA_VISIBLE_DEVICES=8 \
-python -m cifar.train \
+python -m train.train \
 	datadim=mnist \
 	model=unet_mnist \
 	model@wrapper=unet_mnist_wrapper \
@@ -39,4 +45,3 @@ python -m cifar.train \
 	koopman.train.max_epochs=8 \
 	koopman.autoencoder.attention_resolutions=\'14,7\' 
 ```
-

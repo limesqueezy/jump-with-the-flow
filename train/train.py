@@ -285,7 +285,7 @@ def run_koop(cfg: DictConfig, writer: LoggingSummaryWriter, extra_cbs=None):
     ckpt_cb        = ModelCheckpoint(
         dirpath=ckpt_root, filename="best-step{step:06d}-{train_loss_step:.4f}",
         monitor="total_loss", mode="min", save_top_k=1,
-        every_n_train_steps=500, save_on_train_epoch_end=False, save_last=True)
+        every_n_train_steps=400, save_on_train_epoch_end=False, save_last=True)
 
     ckpt_fid_train = ModelCheckpoint(
         dirpath=ckpt_root, monitor="fid_train", mode="min",
